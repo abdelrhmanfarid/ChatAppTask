@@ -8,6 +8,7 @@ import com.example.chatapptask.core.domain.repository.ChatRepository
 import com.example.chatapptask.data.chat.local.ChatLocalDataSource
 import com.example.chatapptask.data.chat.remote.ChatRemoteDataSource
 import com.example.chatapptask.data.chat.worker.TextMessageSendScheduler
+import com.example.chatapptask.data.chat.worker.TextMessageScheduleReason
 import java.time.Instant
 import java.util.UUID
 import javax.inject.Inject
@@ -46,12 +47,12 @@ class DefaultChatRepository @Inject constructor(
             ),
         )
 
-        schedulePersistedTextMessage(messageId)
+        schedulePersistedTextMessage(messageId, TextMessageScheduleReason.INITIAL)
     }
 
     override suspend fun retryMessage(messageId: UUID) {
         requirePersistedTextMessage(messageId)
-        schedulePersistedTextMessage(messageId)
+        schedulePersistedTextMessage(messageId, TextMessageScheduleReason.MANUAL_RETRY)
     }
 
     internal suspend fun sendPersistedTextMessage(messageId: UUID) {
@@ -89,9 +90,12 @@ class DefaultChatRepository @Inject constructor(
         return message
     }
 
-    private suspend fun schedulePersistedTextMessage(messageId: UUID) {
+    private suspend fun schedulePersistedTextMessage(
+        messageId: UUID,
+        reason: TextMessageScheduleReason,
+    ) {
         try {
-            textMessageSendScheduler.enqueue(messageId)
+            textMessageSendScheduler.enqueue(messageId, reason)
         } catch (exception: Exception) {
             localDataSource.markMessageSendFailed(
                 messageId = messageId,

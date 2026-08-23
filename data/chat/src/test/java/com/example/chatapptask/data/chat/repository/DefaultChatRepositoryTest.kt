@@ -9,6 +9,7 @@ import com.example.chatapptask.core.domain.model.User
 import com.example.chatapptask.data.chat.local.ChatLocalDataSource
 import com.example.chatapptask.data.chat.remote.ChatRemoteDataSource
 import com.example.chatapptask.data.chat.worker.TextMessageSendScheduler
+import com.example.chatapptask.data.chat.worker.TextMessageScheduleReason
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
@@ -41,7 +42,10 @@ class DefaultChatRepositoryTest {
         assertEquals(senderId, message.senderId)
         assertEquals("Hello", message.textContent)
         assertTrue(message.media.isEmpty())
-        assertEquals(listOf(message.id), scheduler.messageIds)
+        assertEquals(
+            listOf(ScheduledMessage(message.id, TextMessageScheduleReason.INITIAL)),
+            scheduler.messages,
+        )
         assertTrue(remote.messageIds.isEmpty())
         assertEquals(listOf("local:SENDING", "scheduler:enqueue"), events)
     }
@@ -65,7 +69,10 @@ class DefaultChatRepositoryTest {
         val message = requireNotNull(local.persistedMessage)
         assertSame(failure, thrown)
         assertEquals(1, local.upsertCount)
-        assertEquals(listOf(message.id), scheduler.messageIds)
+        assertEquals(
+            listOf(ScheduledMessage(message.id, TextMessageScheduleReason.INITIAL)),
+            scheduler.messages,
+        )
         assertTrue(remote.messageIds.isEmpty())
         assertEquals(0, local.sendAttemptCount)
         assertEquals(MessageSendStatus.FAILED, requireNotNull(local.currentMessage).sendStatus)
@@ -90,7 +97,10 @@ class DefaultChatRepositoryTest {
         repository.retryMessage(messageId)
 
         assertEquals(0, local.upsertCount)
-        assertEquals(listOf(messageId), scheduler.messageIds)
+        assertEquals(
+            listOf(ScheduledMessage(messageId, TextMessageScheduleReason.MANUAL_RETRY)),
+            scheduler.messages,
+        )
         assertTrue(remote.messageIds.isEmpty())
         assertEquals(listOf("scheduler:enqueue"), events)
     }
@@ -111,7 +121,7 @@ class DefaultChatRepositoryTest {
         }
 
         assertTrue(thrown is PersistedTextMessageNotFoundException)
-        assertTrue(scheduler.messageIds.isEmpty())
+        assertTrue(scheduler.messages.isEmpty())
         assertTrue(remote.messageIds.isEmpty())
         assertEquals(0, local.upsertCount)
     }
@@ -241,14 +251,19 @@ private class RecordingTextMessageSendScheduler(
     private val events: MutableList<String>,
     private val failure: Exception? = null,
 ) : TextMessageSendScheduler {
-    val messageIds = mutableListOf<UUID>()
+    val messages = mutableListOf<ScheduledMessage>()
 
-    override suspend fun enqueue(messageId: UUID) {
-        messageIds += messageId
+    override suspend fun enqueue(messageId: UUID, reason: TextMessageScheduleReason) {
+        messages += ScheduledMessage(messageId, reason)
         events += "scheduler:enqueue"
         failure?.let { throw it }
     }
 }
+
+private data class ScheduledMessage(
+    val messageId: UUID,
+    val reason: TextMessageScheduleReason,
+)
 
 private class RecordingLocalDataSource(
     private val events: MutableList<String>,
