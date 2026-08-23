@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="profile_setup_title">Create your profile</string>
+    <string name="profile_setup_subtitle">Choose how other people will see you in the chat.</string>
+    <string name="profile_setup_add_photo">Add profile photo</string>
+    <string name="profile_setup_username_label">Username</string>
+    <string name="profile_setup_username_supporting_text">Required</string>
+    <string name="profile_setup_age_label">Age (optional)</string>
+    <string name="profile_setup_age_error">Enter a positive whole number.</string>
+    <string name="profile_setup_continue">Continue</string>
+    <string name="profile_setup_saving">Saving…</string>
+</resources>
