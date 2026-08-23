@@ -65,6 +65,25 @@ interface MessageDao {
 
     @Query(
         """
+        UPDATE messages
+        SET created_at = :createdAt,
+            updated_at = :updatedAt,
+            send_status = :status,
+            send_attempt_count = :attemptCount,
+            last_send_error = NULL
+        WHERE id = :messageId
+        """,
+    )
+    suspend fun updateAfterSendSuccess(
+        messageId: UUID,
+        createdAt: Instant,
+        updatedAt: Instant,
+        status: MessageSendStatus,
+        attemptCount: Int,
+    )
+
+    @Query(
+        """
         SELECT * FROM messages
         WHERE send_status IN (:statuses)
         ORDER BY created_at ASC, id ASC

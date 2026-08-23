@@ -104,6 +104,21 @@ class RoomChatLocalDataSource @Inject constructor(
         )
     }
 
+    override suspend fun reconcileSentMessage(
+        messageId: UUID,
+        createdAt: Instant,
+        updatedAt: Instant,
+        attemptCount: Int,
+    ) {
+        messageDao.updateAfterSendSuccess(
+            messageId = messageId,
+            createdAt = createdAt,
+            updatedAt = updatedAt,
+            status = MessageSendStatus.SENT,
+            attemptCount = attemptCount,
+        )
+    }
+
     override suspend fun getMessagesByStatuses(
         statuses: List<MessageSendStatus>,
     ): List<Message> =

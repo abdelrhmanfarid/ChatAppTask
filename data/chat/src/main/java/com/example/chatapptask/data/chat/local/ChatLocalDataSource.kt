@@ -41,6 +41,13 @@ interface ChatLocalDataSource {
         lastError: String?,
     )
 
+    suspend fun reconcileSentMessage(
+        messageId: UUID,
+        createdAt: Instant,
+        updatedAt: Instant,
+        attemptCount: Int,
+    )
+
     suspend fun getMessagesByStatuses(
         statuses: List<MessageSendStatus>,
     ): List<Message>
