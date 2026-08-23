@@ -66,6 +66,7 @@ supabase-realtime = { group = "io.github.jan-tennert.supabase", name = "realtime
 supabase-storage = { group = "io.github.jan-tennert.supabase", name = "storage-kt" }
 
 ktor-client-okhttp = { group = "io.ktor", name = "ktor-client-okhttp", version.ref = "ktor" }
+ktor-client-logging = { group = "io.ktor", name = "ktor-client-logging", version.ref = "ktor" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
