@@ -51,15 +51,27 @@ interface MessageDao {
         """
         UPDATE messages
         SET send_status = :status,
-            send_attempt_count = :attemptCount,
+            send_attempt_count = send_attempt_count + 1,
+            last_send_error = NULL
+        WHERE id = :messageId
+        """,
+    )
+    suspend fun beginSendAttempt(
+        messageId: UUID,
+        status: MessageSendStatus,
+    )
+
+    @Query(
+        """
+        UPDATE messages
+        SET send_status = :status,
             last_send_error = :lastError
         WHERE id = :messageId
         """,
     )
-    suspend fun updateSendState(
+    suspend fun markSendFailed(
         messageId: UUID,
         status: MessageSendStatus,
-        attemptCount: Int,
         lastError: String?,
     )
 
@@ -69,7 +81,6 @@ interface MessageDao {
         SET created_at = :createdAt,
             updated_at = :updatedAt,
             send_status = :status,
-            send_attempt_count = :attemptCount,
             last_send_error = NULL
         WHERE id = :messageId
         """,
@@ -79,7 +90,6 @@ interface MessageDao {
         createdAt: Instant,
         updatedAt: Instant,
         status: MessageSendStatus,
-        attemptCount: Int,
     )
 
     @Query(

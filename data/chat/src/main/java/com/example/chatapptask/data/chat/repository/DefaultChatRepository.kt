@@ -44,17 +44,33 @@ class DefaultChatRepository @Inject constructor(
             ),
         )
 
+        sendPersistedTextMessage(messageId)
+    }
+
+    override suspend fun retryMessage(messageId: UUID) {
+        sendPersistedTextMessage(messageId)
+    }
+
+    private suspend fun sendPersistedTextMessage(messageId: UUID) {
+        val message = localDataSource.getMessageById(messageId)
+            ?: throw PersistedTextMessageNotFoundException(messageId)
+        val text = message.textContent
+            ?: throw PersistedMessageIsNotTextException(messageId)
+        if (message.media.isNotEmpty()) {
+            throw PersistedMessageIsNotTextException(messageId)
+        }
+
+        localDataSource.beginMessageSendAttempt(messageId)
+
         val remoteMessage = try {
             remoteDataSource.insertTextMessage(
                 messageId = messageId,
-                senderId = senderId,
+                senderId = message.senderId,
                 text = text,
             )
         } catch (exception: Exception) {
-            localDataSource.updateMessageSendState(
+            localDataSource.markMessageSendFailed(
                 messageId = messageId,
-                status = MessageSendStatus.FAILED,
-                attemptCount = INITIAL_SEND_ATTEMPT_COUNT,
                 lastError = exception.message ?: UNKNOWN_SEND_ERROR,
             )
             throw exception
@@ -64,7 +80,6 @@ class DefaultChatRepository @Inject constructor(
             messageId = messageId,
             createdAt = remoteMessage.createdAt,
             updatedAt = remoteMessage.updatedAt,
-            attemptCount = INITIAL_SEND_ATTEMPT_COUNT,
         )
     }
 
@@ -72,8 +87,6 @@ class DefaultChatRepository @Inject constructor(
         media: List<PendingMedia>,
         text: String?,
     ) = unsupported("sendMediaMessage")
-
-    override suspend fun retryMessage(messageId: UUID) = unsupported("retryMessage")
 
     override suspend fun retryMediaItem(
         messageId: UUID,
@@ -88,7 +101,14 @@ class DefaultChatRepository @Inject constructor(
         throw UnsupportedOperationException("$operation is not implemented yet.")
 
     private companion object {
-        const val INITIAL_SEND_ATTEMPT_COUNT = 1
         const val UNKNOWN_SEND_ERROR = "Remote text-message insert failed."
     }
 }
+
+internal sealed class PersistedTextMessageException(message: String) : IllegalStateException(message)
+
+internal class PersistedTextMessageNotFoundException(messageId: UUID) :
+    PersistedTextMessageException("Text message $messageId does not exist locally.")
+
+internal class PersistedMessageIsNotTextException(messageId: UUID) :
+    PersistedTextMessageException("Message $messageId is not a text-only message.")

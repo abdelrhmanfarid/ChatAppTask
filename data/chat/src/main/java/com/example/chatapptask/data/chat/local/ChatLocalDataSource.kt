@@ -34,18 +34,14 @@ interface ChatLocalDataSource {
         limit: Int,
     ): List<Message>
 
-    suspend fun updateMessageSendState(
-        messageId: UUID,
-        status: MessageSendStatus,
-        attemptCount: Int,
-        lastError: String?,
-    )
+    suspend fun beginMessageSendAttempt(messageId: UUID)
+
+    suspend fun markMessageSendFailed(messageId: UUID, lastError: String?)
 
     suspend fun reconcileSentMessage(
         messageId: UUID,
         createdAt: Instant,
         updatedAt: Instant,
-        attemptCount: Int,
     )
 
     suspend fun getMessagesByStatuses(

@@ -90,16 +90,17 @@ class RoomChatLocalDataSource @Inject constructor(
             ),
         )
 
-    override suspend fun updateMessageSendState(
-        messageId: UUID,
-        status: MessageSendStatus,
-        attemptCount: Int,
-        lastError: String?,
-    ) {
-        messageDao.updateSendState(
+    override suspend fun beginMessageSendAttempt(messageId: UUID) {
+        messageDao.beginSendAttempt(
             messageId = messageId,
-            status = status,
-            attemptCount = attemptCount,
+            status = MessageSendStatus.SENDING,
+        )
+    }
+
+    override suspend fun markMessageSendFailed(messageId: UUID, lastError: String?) {
+        messageDao.markSendFailed(
+            messageId = messageId,
+            status = MessageSendStatus.FAILED,
             lastError = lastError,
         )
     }
@@ -108,14 +109,12 @@ class RoomChatLocalDataSource @Inject constructor(
         messageId: UUID,
         createdAt: Instant,
         updatedAt: Instant,
-        attemptCount: Int,
     ) {
         messageDao.updateAfterSendSuccess(
             messageId = messageId,
             createdAt = createdAt,
             updatedAt = updatedAt,
             status = MessageSendStatus.SENT,
-            attemptCount = attemptCount,
         )
     }
 
