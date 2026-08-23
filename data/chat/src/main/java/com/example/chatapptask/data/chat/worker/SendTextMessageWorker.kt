@@ -6,7 +6,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.Data
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
-import com.example.chatapptask.core.domain.repository.ChatRepository
+import com.example.chatapptask.data.chat.repository.DefaultChatRepository
 import com.example.chatapptask.data.chat.repository.PersistedTextMessageException
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
@@ -16,14 +16,14 @@ import java.util.UUID
 class SendTextMessageWorker @AssistedInject constructor(
     @Assisted applicationContext: Context,
     @Assisted workerParameters: WorkerParameters,
-    private val chatRepository: ChatRepository,
+    private val chatRepository: DefaultChatRepository,
 ) : CoroutineWorker(applicationContext, workerParameters) {
     override suspend fun doWork(): Result {
         val messageId = inputData.getString(INPUT_MESSAGE_ID)?.toUuidOrNull()
             ?: return Result.failure()
 
         return try {
-            chatRepository.retryMessage(messageId)
+            chatRepository.sendPersistedTextMessage(messageId)
             Result.success()
         } catch (_: PersistedTextMessageException) {
             Result.failure()

@@ -6,6 +6,8 @@ import com.example.chatapptask.data.chat.remote.ChatRemoteDataSource
 import com.example.chatapptask.data.chat.remote.SupabaseChatRemoteDataSource
 import com.example.chatapptask.data.chat.repository.DefaultChatRepository
 import com.example.chatapptask.core.domain.repository.ChatRepository
+import com.example.chatapptask.data.chat.worker.TextMessageSendScheduler
+import com.example.chatapptask.data.chat.worker.WorkManagerTextMessageSendScheduler
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -28,4 +30,9 @@ abstract class ChatDataSourceModule {
     abstract fun bindChatRemoteDataSource(
         implementation: SupabaseChatRemoteDataSource,
     ): ChatRemoteDataSource
+
+    @Binds
+    abstract fun bindTextMessageSendScheduler(
+        implementation: WorkManagerTextMessageSendScheduler,
+    ): TextMessageSendScheduler
 }

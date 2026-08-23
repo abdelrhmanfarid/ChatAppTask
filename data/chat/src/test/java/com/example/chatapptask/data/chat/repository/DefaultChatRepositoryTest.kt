@@ -8,6 +8,7 @@ import com.example.chatapptask.core.domain.model.MessageSendStatus
 import com.example.chatapptask.core.domain.model.User
 import com.example.chatapptask.data.chat.local.ChatLocalDataSource
 import com.example.chatapptask.data.chat.remote.ChatRemoteDataSource
+import com.example.chatapptask.data.chat.worker.TextMessageSendScheduler
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
@@ -24,77 +25,35 @@ class DefaultChatRepositoryTest {
     private val serverUpdatedAt = Instant.parse("2026-08-23T12:35:01Z")
 
     @Test
-    fun sendTextMessage_persistsSendingMessageBeforeRemoteInsert_andUsesSameId() = runBlocking {
+    fun sendTextMessage_persistsOnceBeforeSchedulingSameId_withoutRemoteCall() = runBlocking {
         val events = mutableListOf<String>()
         val local = RecordingLocalDataSource(events)
         val remote = RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt)
-        remote.attemptCountProvider = { local.sendAttemptCount }
-        val repository = createRepository(local, remote)
+        val scheduler = RecordingTextMessageSendScheduler(events)
+        val repository = createRepository(local, remote, scheduler)
 
         repository.sendTextMessage("Hello")
 
-        val persistedMessage = requireNotNull(local.persistedMessage)
-        assertEquals(MessageSendStatus.SENDING, persistedMessage.sendStatus)
-        assertEquals(senderId, persistedMessage.senderId)
-        assertEquals("Hello", persistedMessage.textContent)
-        assertTrue(persistedMessage.media.isEmpty())
-        assertEquals(0, local.attemptCountAtUpsert)
-        assertEquals(listOf(1), remote.attemptCountsAtInsert)
-        assertEquals(1, local.sendAttemptCount)
-        assertEquals(persistedMessage.id, remote.messageId)
-        assertEquals(senderId, remote.senderId)
-        assertEquals("Hello", remote.text)
-        assertEquals(
-            listOf("local:SENDING", "local:SENDING", "remote:insert", "local:SENT"),
-            events,
-        )
+        val message = requireNotNull(local.persistedMessage)
+        assertEquals(1, local.upsertCount)
+        assertEquals(MessageSendStatus.SENDING, message.sendStatus)
+        assertEquals(0, local.sendAttemptCount)
+        assertEquals(senderId, message.senderId)
+        assertEquals("Hello", message.textContent)
+        assertTrue(message.media.isEmpty())
+        assertEquals(listOf(message.id), scheduler.messageIds)
+        assertTrue(remote.messageIds.isEmpty())
+        assertEquals(listOf("local:SENDING", "scheduler:enqueue"), events)
     }
 
     @Test
-    fun sendTextMessage_remoteSuccess_reconcilesSentStateAndServerTimestamps() = runBlocking {
-        val local = RecordingLocalDataSource(mutableListOf())
-        val remote = RecordingRemoteDataSource(
-            events = mutableListOf(),
-            createdAt = serverCreatedAt,
-            updatedAt = serverUpdatedAt,
-        )
-        remote.attemptCountProvider = { local.sendAttemptCount }
-        val repository = createRepository(local, remote)
-
-        repository.sendTextMessage("Hello")
-
-        val reconciledMessage = requireNotNull(local.currentMessage)
-        assertEquals(
-            SendSuccessUpdate(
-                messageId = requireNotNull(local.persistedMessage).id,
-                createdAt = serverCreatedAt,
-                updatedAt = serverUpdatedAt,
-                attemptCount = 1,
-            ),
-            local.successUpdates.single(),
-        )
-        assertEquals(0, local.attemptCountAtUpsert)
-        assertEquals(listOf(1), remote.attemptCountsAtInsert)
-        assertEquals(1, local.sendAttemptCount)
-        assertEquals(requireNotNull(local.persistedMessage).id, reconciledMessage.id)
-        assertEquals(MessageSendStatus.SENT, reconciledMessage.sendStatus)
-        assertEquals(serverCreatedAt, reconciledMessage.createdAt)
-        assertEquals(serverUpdatedAt, reconciledMessage.updatedAt)
-    }
-
-    @Test
-    fun sendTextMessage_remoteFailure_marksFailedAndRethrows() = runBlocking {
+    fun sendTextMessage_schedulingFailure_keepsMessageAndMarksFailed() = runBlocking {
         val events = mutableListOf<String>()
-        val failure = IllegalStateException("network unavailable")
+        val failure = IllegalStateException("scheduler unavailable")
         val local = RecordingLocalDataSource(events)
-        val remote = RecordingRemoteDataSource(
-            events = events,
-            createdAt = serverCreatedAt,
-            updatedAt = serverUpdatedAt,
-            failure = failure,
-        )
-        remote.attemptCountProvider = { local.sendAttemptCount }
-        val repository = createRepository(local, remote)
+        val remote = RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt)
+        val scheduler = RecordingTextMessageSendScheduler(events, failure)
+        val repository = createRepository(local, remote, scheduler)
         var thrown: Throwable? = null
 
         try {
@@ -103,133 +62,46 @@ class DefaultChatRepositoryTest {
             thrown = exception
         }
 
-        val persistedMessage = requireNotNull(local.persistedMessage)
+        val message = requireNotNull(local.persistedMessage)
         assertSame(failure, thrown)
+        assertEquals(1, local.upsertCount)
+        assertEquals(listOf(message.id), scheduler.messageIds)
+        assertTrue(remote.messageIds.isEmpty())
+        assertEquals(0, local.sendAttemptCount)
+        assertEquals(MessageSendStatus.FAILED, requireNotNull(local.currentMessage).sendStatus)
+        assertEquals("scheduler unavailable", local.stateUpdates.single().lastError)
         assertEquals(
-            SendStateUpdate(
-                messageId = persistedMessage.id,
-                status = MessageSendStatus.FAILED,
-                attemptCount = 1,
-                lastError = "network unavailable",
-            ),
-            local.stateUpdates.last(),
-        )
-        assertEquals(
-            listOf("local:SENDING", "local:SENDING", "remote:insert", "local:FAILED"),
+            listOf("local:SENDING", "scheduler:enqueue", "local:FAILED"),
             events,
         )
-        assertEquals(MessageSendStatus.FAILED, requireNotNull(local.currentMessage).sendStatus)
-        assertEquals(1, local.sendAttemptCount)
-        assertEquals(listOf(1), remote.attemptCountsAtInsert)
-        assertTrue(local.successUpdates.isEmpty())
     }
 
     @Test
-    fun sendTextMessage_failureThenRetry_incrementsAttemptCountWithoutDuplicateMessage() =
-        runBlocking {
-            val events = mutableListOf<String>()
-            val failure = IllegalStateException("network unavailable")
-            val local = RecordingLocalDataSource(events)
-            val remote = RecordingRemoteDataSource(
-                events = events,
-                createdAt = serverCreatedAt,
-                updatedAt = serverUpdatedAt,
-                failure = failure,
-            )
-            remote.attemptCountProvider = { local.sendAttemptCount }
-            val repository = createRepository(local, remote)
-
-            try {
-                repository.sendTextMessage("Hello")
-            } catch (_: IllegalStateException) {
-                // The original failure is verified by the focused failure test.
-            }
-            val messageId = requireNotNull(local.persistedMessage).id
-            remote.failure = null
-
-            repository.retryMessage(messageId)
-
-            assertEquals(1, local.upsertCount)
-            assertEquals(listOf(messageId, messageId), remote.messageIds)
-            assertEquals(listOf(1, 2), remote.attemptCountsAtInsert)
-            assertEquals(2, local.sendAttemptCount)
-            assertEquals(MessageSendStatus.SENT, requireNotNull(local.currentMessage).sendStatus)
-            assertEquals(2, local.successUpdates.single().attemptCount)
-        }
-
-    @Test
-    fun retryMessage_reusesExistingUuidWithoutCreatingAnotherLocalMessage() = runBlocking {
+    fun retryMessage_schedulesExistingId_withoutCreatingOrSendingDirectly() = runBlocking {
         val events = mutableListOf<String>()
         val messageId = UUID.fromString("dc4e6f23-5017-44de-bdf9-45c737a2dcc8")
         val local = RecordingLocalDataSource(events).apply {
             seedMessage(persistedTextMessage(messageId, MessageSendStatus.FAILED))
         }
         val remote = RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt)
-        val repository = createRepository(local, remote)
+        val scheduler = RecordingTextMessageSendScheduler(events)
+        val repository = createRepository(local, remote, scheduler)
 
         repository.retryMessage(messageId)
 
-        val currentMessage = requireNotNull(local.currentMessage)
         assertEquals(0, local.upsertCount)
-        assertEquals(messageId, remote.messageId)
-        assertEquals(messageId, currentMessage.id)
-        assertEquals(MessageSendStatus.SENT, currentMessage.sendStatus)
-        assertEquals(serverCreatedAt, currentMessage.createdAt)
-        assertEquals(serverUpdatedAt, currentMessage.updatedAt)
-        assertEquals(
-            listOf("local:SENDING", "remote:insert", "local:SENT"),
-            events,
-        )
+        assertEquals(listOf(messageId), scheduler.messageIds)
+        assertTrue(remote.messageIds.isEmpty())
+        assertEquals(listOf("scheduler:enqueue"), events)
     }
 
     @Test
-    fun retryMessage_remoteFailure_marksExistingMessageFailed() = runBlocking {
-        val events = mutableListOf<String>()
-        val messageId = UUID.fromString("f6a81485-77d2-4dd4-85ad-c80c509d5708")
-        val failure = IllegalStateException("network unavailable")
-        val local = RecordingLocalDataSource(events).apply {
-            seedMessage(persistedTextMessage(messageId, MessageSendStatus.FAILED))
-        }
-        val remote = RecordingRemoteDataSource(
-            events = events,
-            createdAt = serverCreatedAt,
-            updatedAt = serverUpdatedAt,
-            failure = failure,
-        )
-        val repository = createRepository(local, remote)
-        var thrown: Throwable? = null
-
-        try {
-            repository.retryMessage(messageId)
-        } catch (exception: Throwable) {
-            thrown = exception
-        }
-
-        assertSame(failure, thrown)
-        assertEquals(0, local.upsertCount)
-        assertEquals(messageId, remote.messageId)
-        assertEquals(MessageSendStatus.FAILED, requireNotNull(local.currentMessage).sendStatus)
-        assertEquals(
-            listOf(MessageSendStatus.SENDING, MessageSendStatus.FAILED),
-            local.stateUpdates.map(SendStateUpdate::status),
-        )
-        assertEquals("network unavailable", local.stateUpdates.last().lastError)
-        assertEquals(
-            listOf("local:SENDING", "remote:insert", "local:FAILED"),
-            events,
-        )
-    }
-
-    @Test
-    fun retryMessage_missingLocalMessage_failsDeterministically() = runBlocking {
+    fun retryMessage_missingLocalMessage_failsWithoutScheduling() = runBlocking {
         val messageId = UUID.fromString("a4558744-b5f6-4ca3-8f81-9ba9750565ea")
         val local = RecordingLocalDataSource(mutableListOf())
-        val remote = RecordingRemoteDataSource(
-            events = mutableListOf(),
-            createdAt = serverCreatedAt,
-            updatedAt = serverUpdatedAt,
-        )
-        val repository = createRepository(local, remote)
+        val remote = RecordingRemoteDataSource(mutableListOf(), serverCreatedAt, serverUpdatedAt)
+        val scheduler = RecordingTextMessageSendScheduler(mutableListOf())
+        val repository = createRepository(local, remote, scheduler)
         var thrown: Throwable? = null
 
         try {
@@ -239,15 +111,104 @@ class DefaultChatRepositoryTest {
         }
 
         assertTrue(thrown is PersistedTextMessageNotFoundException)
+        assertTrue(scheduler.messageIds.isEmpty())
+        assertTrue(remote.messageIds.isEmpty())
         assertEquals(0, local.upsertCount)
-        assertEquals(null, remote.messageId)
-        assertTrue(local.stateUpdates.isEmpty())
-        assertTrue(local.successUpdates.isEmpty())
+    }
+
+    @Test
+    fun sendPersistedTextMessage_incrementsBeforeRemoteAndReconcilesSuccess() = runBlocking {
+        val events = mutableListOf<String>()
+        val messageId = UUID.fromString("e0a56a2f-f246-40fb-bab0-5f91bb62e06c")
+        val local = RecordingLocalDataSource(events).apply {
+            seedMessage(persistedTextMessage(messageId, MessageSendStatus.SENDING), attemptCount = 0)
+        }
+        val remote = RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt).apply {
+            attemptCountProvider = { local.sendAttemptCount }
+        }
+        val repository = createRepository(local, remote, RecordingTextMessageSendScheduler(events))
+
+        repository.sendPersistedTextMessage(messageId)
+
+        val message = requireNotNull(local.currentMessage)
+        assertEquals(listOf(messageId), remote.messageIds)
+        assertEquals(listOf(1), remote.attemptCountsAtInsert)
+        assertEquals(1, local.sendAttemptCount)
+        assertEquals(MessageSendStatus.SENT, message.sendStatus)
+        assertEquals(serverCreatedAt, message.createdAt)
+        assertEquals(serverUpdatedAt, message.updatedAt)
+        assertEquals(listOf("local:SENDING", "remote:insert", "local:SENT"), events)
+    }
+
+    @Test
+    fun sendPersistedTextMessage_remoteFailure_marksFailedAndRethrows() = runBlocking {
+        val events = mutableListOf<String>()
+        val failure = IllegalStateException("network unavailable")
+        val messageId = UUID.fromString("f6a81485-77d2-4dd4-85ad-c80c509d5708")
+        val local = RecordingLocalDataSource(events).apply {
+            seedMessage(persistedTextMessage(messageId, MessageSendStatus.SENDING), attemptCount = 0)
+        }
+        val remote = RecordingRemoteDataSource(
+            events,
+            serverCreatedAt,
+            serverUpdatedAt,
+            failure,
+        ).apply {
+            attemptCountProvider = { local.sendAttemptCount }
+        }
+        val repository = createRepository(local, remote, RecordingTextMessageSendScheduler(events))
+        var thrown: Throwable? = null
+
+        try {
+            repository.sendPersistedTextMessage(messageId)
+        } catch (exception: Throwable) {
+            thrown = exception
+        }
+
+        assertSame(failure, thrown)
+        assertEquals(1, local.sendAttemptCount)
+        assertEquals(listOf(1), remote.attemptCountsAtInsert)
+        assertEquals(MessageSendStatus.FAILED, requireNotNull(local.currentMessage).sendStatus)
+        assertEquals("network unavailable", local.stateUpdates.last().lastError)
+        assertEquals(listOf("local:SENDING", "remote:insert", "local:FAILED"), events)
+    }
+
+    @Test
+    fun sendPersistedTextMessage_failureThenRetry_countsBothAttemptsWithSameId() = runBlocking {
+        val events = mutableListOf<String>()
+        val failure = IllegalStateException("network unavailable")
+        val messageId = UUID.fromString("344938fd-2c79-49b1-93ce-c000c78e29ba")
+        val local = RecordingLocalDataSource(events).apply {
+            seedMessage(persistedTextMessage(messageId, MessageSendStatus.SENDING), attemptCount = 0)
+        }
+        val remote = RecordingRemoteDataSource(
+            events,
+            serverCreatedAt,
+            serverUpdatedAt,
+            failure,
+        ).apply {
+            attemptCountProvider = { local.sendAttemptCount }
+        }
+        val repository = createRepository(local, remote, RecordingTextMessageSendScheduler(events))
+
+        try {
+            repository.sendPersistedTextMessage(messageId)
+        } catch (_: IllegalStateException) {
+            // Expected first-attempt failure.
+        }
+        remote.failure = null
+        repository.sendPersistedTextMessage(messageId)
+
+        assertEquals(listOf(messageId, messageId), remote.messageIds)
+        assertEquals(listOf(1, 2), remote.attemptCountsAtInsert)
+        assertEquals(2, local.sendAttemptCount)
+        assertEquals(MessageSendStatus.SENT, requireNotNull(local.currentMessage).sendStatus)
     }
 
     private fun createRepository(
         localDataSource: ChatLocalDataSource,
         remoteDataSource: ChatRemoteDataSource,
+        scheduler: TextMessageSendScheduler,
     ): DefaultChatRepository =
         DefaultChatRepository(
             localDataSource = localDataSource,
@@ -255,12 +216,10 @@ class DefaultChatRepositoryTest {
             userIdentityStore = object : UserIdentityStore {
                 override suspend fun getOrCreateUserId(): UUID = senderId
             },
+            textMessageSendScheduler = scheduler,
         )
 
-    private fun persistedTextMessage(
-        messageId: UUID,
-        status: MessageSendStatus,
-    ): Message =
+    private fun persistedTextMessage(messageId: UUID, status: MessageSendStatus): Message =
         Message(
             id = messageId,
             senderId = senderId,
@@ -273,18 +232,23 @@ class DefaultChatRepositoryTest {
 }
 
 private data class SendStateUpdate(
-    val messageId: UUID,
     val status: MessageSendStatus,
     val attemptCount: Int,
     val lastError: String?,
 )
 
-private data class SendSuccessUpdate(
-    val messageId: UUID,
-    val createdAt: Instant,
-    val updatedAt: Instant,
-    val attemptCount: Int,
-)
+private class RecordingTextMessageSendScheduler(
+    private val events: MutableList<String>,
+    private val failure: Exception? = null,
+) : TextMessageSendScheduler {
+    val messageIds = mutableListOf<UUID>()
+
+    override suspend fun enqueue(messageId: UUID) {
+        messageIds += messageId
+        events += "scheduler:enqueue"
+        failure?.let { throw it }
+    }
+}
 
 private class RecordingLocalDataSource(
     private val events: MutableList<String>,
@@ -293,16 +257,13 @@ private class RecordingLocalDataSource(
     var currentMessage: Message? = null
     var upsertCount = 0
     var sendAttemptCount = 0
-    var attemptCountAtUpsert: Int? = null
     val stateUpdates = mutableListOf<SendStateUpdate>()
-    val successUpdates = mutableListOf<SendSuccessUpdate>()
 
     override suspend fun upsertMessage(message: Message) {
         upsertCount += 1
         persistedMessage = message
         currentMessage = message
         sendAttemptCount = 0
-        attemptCountAtUpsert = sendAttemptCount
         events += "local:${message.sendStatus}"
     }
 
@@ -313,23 +274,13 @@ private class RecordingLocalDataSource(
 
     override suspend fun beginMessageSendAttempt(messageId: UUID) {
         sendAttemptCount += 1
-        stateUpdates += SendStateUpdate(
-            messageId = messageId,
-            status = MessageSendStatus.SENDING,
-            attemptCount = sendAttemptCount,
-            lastError = null,
-        )
+        stateUpdates += SendStateUpdate(MessageSendStatus.SENDING, sendAttemptCount, null)
         currentMessage = requireNotNull(currentMessage).copy(sendStatus = MessageSendStatus.SENDING)
         events += "local:SENDING"
     }
 
     override suspend fun markMessageSendFailed(messageId: UUID, lastError: String?) {
-        stateUpdates += SendStateUpdate(
-            messageId = messageId,
-            status = MessageSendStatus.FAILED,
-            attemptCount = sendAttemptCount,
-            lastError = lastError,
-        )
+        stateUpdates += SendStateUpdate(MessageSendStatus.FAILED, sendAttemptCount, lastError)
         currentMessage = requireNotNull(currentMessage).copy(sendStatus = MessageSendStatus.FAILED)
         events += "local:FAILED"
     }
@@ -339,7 +290,6 @@ private class RecordingLocalDataSource(
         createdAt: Instant,
         updatedAt: Instant,
     ) {
-        successUpdates += SendSuccessUpdate(messageId, createdAt, updatedAt, sendAttemptCount)
         currentMessage = requireNotNull(currentMessage).copy(
             createdAt = createdAt,
             updatedAt = updatedAt,
@@ -348,24 +298,23 @@ private class RecordingLocalDataSource(
         events += "local:SENT"
     }
 
-    override fun observeMessages(): Flow<List<Message>> = emptyFlow()
+    override suspend fun getMessageById(messageId: UUID): Message? =
+        currentMessage?.takeIf { it.id == messageId }
 
+    override fun observeMessages(): Flow<List<Message>> = emptyFlow()
     override suspend fun upsertUser(user: User) = unused()
     override suspend fun upsertUsers(users: List<User>) = unused()
     override suspend fun getUserById(userId: UUID): User? = unused()
     override fun observeUserById(userId: UUID): Flow<User?> = unused()
     override suspend fun upsertMessages(messages: List<Message>) = unused()
-    override suspend fun getMessageById(messageId: UUID): Message? =
-        currentMessage?.takeIf { message -> message.id == messageId }
     override suspend fun getLatestMessages(limit: Int): List<Message> = unused()
     override suspend fun getOlderMessages(
         cursorCreatedAt: Instant,
         cursorMessageId: UUID,
         limit: Int,
     ): List<Message> = unused()
-    override suspend fun getMessagesByStatuses(
-        statuses: List<MessageSendStatus>,
-    ): List<Message> = unused()
+    override suspend fun getMessagesByStatuses(statuses: List<MessageSendStatus>): List<Message> =
+        unused()
     override suspend fun upsertMedia(media: MessageMedia) = unused()
     override suspend fun upsertMedia(items: List<MessageMedia>) = unused()
     override suspend fun getMediaForMessage(messageId: UUID): List<MessageMedia> = unused()
@@ -382,9 +331,8 @@ private class RecordingLocalDataSource(
         attemptCount: Int,
         error: String?,
     ) = unused()
-    override suspend fun getMediaByStatuses(
-        statuses: List<MediaUploadStatus>,
-    ): List<MessageMedia> = unused()
+    override suspend fun getMediaByStatuses(statuses: List<MediaUploadStatus>): List<MessageMedia> =
+        unused()
     override suspend fun deleteMediaForMessage(messageId: UUID) = unused()
 }
 
@@ -398,9 +346,6 @@ private class RecordingRemoteDataSource(
     var attemptCountProvider: (() -> Int)? = null
     val attemptCountsAtInsert = mutableListOf<Int>()
     val messageIds = mutableListOf<UUID>()
-    var messageId: UUID? = null
-    var senderId: UUID? = null
-    var text: String? = null
 
     override suspend fun insertTextMessage(
         messageId: UUID,
@@ -410,10 +355,7 @@ private class RecordingRemoteDataSource(
         events += "remote:insert"
         attemptCountProvider?.invoke()?.let(attemptCountsAtInsert::add)
         messageIds += messageId
-        this.messageId = messageId
-        this.senderId = senderId
-        this.text = text
-        failure?.let { exception -> throw exception }
+        failure?.let { throw it }
         return Message(
             id = messageId,
             senderId = senderId,

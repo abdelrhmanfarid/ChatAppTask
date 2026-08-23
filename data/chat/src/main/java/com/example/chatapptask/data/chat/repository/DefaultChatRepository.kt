@@ -7,6 +7,7 @@ import com.example.chatapptask.core.domain.model.PendingMedia
 import com.example.chatapptask.core.domain.repository.ChatRepository
 import com.example.chatapptask.data.chat.local.ChatLocalDataSource
 import com.example.chatapptask.data.chat.remote.ChatRemoteDataSource
+import com.example.chatapptask.data.chat.worker.TextMessageSendScheduler
 import java.time.Instant
 import java.util.UUID
 import javax.inject.Inject
@@ -16,6 +17,7 @@ class DefaultChatRepository @Inject constructor(
     private val localDataSource: ChatLocalDataSource,
     private val remoteDataSource: ChatRemoteDataSource,
     private val userIdentityStore: UserIdentityStore,
+    private val textMessageSendScheduler: TextMessageSendScheduler,
 ) : ChatRepository {
     override fun observeMessages(): Flow<List<Message>> = localDataSource.observeMessages()
 
@@ -44,21 +46,16 @@ class DefaultChatRepository @Inject constructor(
             ),
         )
 
-        sendPersistedTextMessage(messageId)
+        schedulePersistedTextMessage(messageId)
     }
 
     override suspend fun retryMessage(messageId: UUID) {
-        sendPersistedTextMessage(messageId)
+        requirePersistedTextMessage(messageId)
+        schedulePersistedTextMessage(messageId)
     }
 
-    private suspend fun sendPersistedTextMessage(messageId: UUID) {
-        val message = localDataSource.getMessageById(messageId)
-            ?: throw PersistedTextMessageNotFoundException(messageId)
-        val text = message.textContent
-            ?: throw PersistedMessageIsNotTextException(messageId)
-        if (message.media.isNotEmpty()) {
-            throw PersistedMessageIsNotTextException(messageId)
-        }
+    internal suspend fun sendPersistedTextMessage(messageId: UUID) {
+        val message = requirePersistedTextMessage(messageId)
 
         localDataSource.beginMessageSendAttempt(messageId)
 
@@ -66,7 +63,7 @@ class DefaultChatRepository @Inject constructor(
             remoteDataSource.insertTextMessage(
                 messageId = messageId,
                 senderId = message.senderId,
-                text = text,
+                text = requireNotNull(message.textContent),
             )
         } catch (exception: Exception) {
             localDataSource.markMessageSendFailed(
@@ -81,6 +78,27 @@ class DefaultChatRepository @Inject constructor(
             createdAt = remoteMessage.createdAt,
             updatedAt = remoteMessage.updatedAt,
         )
+    }
+
+    private suspend fun requirePersistedTextMessage(messageId: UUID): Message {
+        val message = localDataSource.getMessageById(messageId)
+            ?: throw PersistedTextMessageNotFoundException(messageId)
+        if (message.textContent == null || message.media.isNotEmpty()) {
+            throw PersistedMessageIsNotTextException(messageId)
+        }
+        return message
+    }
+
+    private suspend fun schedulePersistedTextMessage(messageId: UUID) {
+        try {
+            textMessageSendScheduler.enqueue(messageId)
+        } catch (exception: Exception) {
+            localDataSource.markMessageSendFailed(
+                messageId = messageId,
+                lastError = exception.message ?: UNKNOWN_SCHEDULING_ERROR,
+            )
+            throw exception
+        }
     }
 
     override suspend fun sendMediaMessage(
@@ -102,6 +120,7 @@ class DefaultChatRepository @Inject constructor(
 
     private companion object {
         const val UNKNOWN_SEND_ERROR = "Remote text-message insert failed."
+        const val UNKNOWN_SCHEDULING_ERROR = "Text-message scheduling failed."
     }
 }
 
