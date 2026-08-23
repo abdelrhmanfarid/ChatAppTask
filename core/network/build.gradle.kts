@@ -1,8 +1,33 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
 }
+
+val localProperties = Properties().apply {
+    val localPropertiesFile = rootProject.file("local.properties")
+    if (localPropertiesFile.exists()) {
+        localPropertiesFile.inputStream().use(::load)
+    }
+}
+
+fun configurationValue(name: String): String =
+    localProperties.getProperty(name)
+        ?.takeIf(String::isNotBlank)
+        ?: providers.environmentVariable(name).orNull.orEmpty()
+
+fun String.toBuildConfigString(): String =
+    "\"" +
+        replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+            .replace("\n", "\\n")
+            .replace("\r", "\\r") +
+        "\""
+
+val supabaseUrl = configurationValue("SUPABASE_URL")
+val supabaseAnonKey = configurationValue("SUPABASE_ANON_KEY")
 
 android {
     namespace = "com.example.chatapptask.core.network"
@@ -12,11 +37,18 @@ android {
 
     defaultConfig {
         minSdk = 26
+
+        buildConfigField("String", "SUPABASE_URL", supabaseUrl.toBuildConfigString())
+        buildConfigField("String", "SUPABASE_ANON_KEY", supabaseAnonKey.toBuildConfigString())
     }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 }
 
