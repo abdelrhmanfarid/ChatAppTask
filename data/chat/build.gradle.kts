@@ -25,6 +25,10 @@ dependencies {
     implementation(project(":core:database"))
     implementation(project(":core:network"))
 
+    implementation(platform(libs.supabase.bom))
+    implementation(libs.supabase.postgrest)
+    implementation(libs.supabase.storage)
+
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.coroutines.android)
 
