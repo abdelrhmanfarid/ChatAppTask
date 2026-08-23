@@ -24,4 +24,10 @@ dependencyResolutionManagement {
 
 rootProject.name = "ChatAppTask"
 include(":app")
- 
+include(":core:common")
+include(":core:domain")
+include(":core:database")
+include(":core:network")
+include(":data:chat")
+include(":feature:chat")
+include(":feature:profile")
