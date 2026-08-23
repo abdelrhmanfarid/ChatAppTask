@@ -35,13 +35,26 @@ interface MessageMediaDao {
 
     @Query(
         """
+        SELECT * FROM message_media
+        WHERE message_id IN (:messageIds)
+        ORDER BY message_id ASC, position ASC
+        """,
+    )
+    fun observeMediaForMessages(
+        messageIds: List<UUID>,
+    ): Flow<List<MessageMediaEntity>>
+
+    @Query(
+        """
         UPDATE message_media
-        SET upload_progress = :progress
+        SET upload_status = :status,
+            upload_progress = :progress
         WHERE id = :mediaId
         """,
     )
     suspend fun updateUploadProgress(
         mediaId: UUID,
+        status: MediaUploadStatus,
         progress: Int,
     )
 
