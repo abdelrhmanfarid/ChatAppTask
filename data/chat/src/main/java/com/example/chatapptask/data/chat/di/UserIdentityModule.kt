@@ -1,7 +1,8 @@
 package com.example.chatapptask.data.chat.di
 
 import android.content.Context
-import com.example.chatapptask.core.common.identity.DataStoreUserIdentityStore
+import android.provider.Settings
+import com.example.chatapptask.core.common.identity.AndroidIdUserIdentityStore
 import com.example.chatapptask.core.common.identity.UserIdentityStore
 import dagger.Module
 import dagger.Provides
@@ -17,5 +18,7 @@ object UserIdentityModule {
     @Singleton
     fun provideUserIdentityStore(
         @ApplicationContext context: Context,
-    ): UserIdentityStore = DataStoreUserIdentityStore(context)
+    ): UserIdentityStore = AndroidIdUserIdentityStore {
+        Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+    }
 }

@@ -5,7 +5,7 @@ Branch: `feature/text-messaging`. Repository code is authoritative; check `git s
 ## Modules
 
 - `:app`: application entry point, Material 3 theme, Android/Compose splash, Hilt/WorkManager setup.
-- `:core:common`: `UserIdentityStore`; `DataStoreUserIdentityStore` persists a locally generated UUID.
+- `:core:common`: `UserIdentityStore`; `AndroidIdUserIdentityStore` derives a stable UUID from `Settings.Secure.ANDROID_ID` (no identity DataStore).
 - `:core:domain`: pure Kotlin models and `ChatRepository`/`UserRepository` contracts.
 - `:core:database`: Room database, entities, DAOs, converters, and mappings.
 - `:core:network`: Supabase client, DTOs, mappings, and debug-only Ktor logging.
@@ -19,7 +19,7 @@ Branch: `feature/text-messaging`. Repository code is authoritative; check `git s
 
 - Domain models: `User`, `Message`, `MessageMedia`, `PendingMedia`; send states are `SENDING`, `SENT`, `FAILED`.
 - `ChatRepository` declares observation, paging, text/media send/retry, and Realtime lifecycle operations.
-- `UserRepository` supports current local identity, local/remote user lookup, observation, and upsert.
+- `UserRepository` supports current local identity, local/remote user lookup, observation, and upsert. Identity is a version-3 name UUID from the device `ANDROID_ID` (UTF-8, trimmed/lowercased). Missing/blank `ANDROID_ID` fails explicitly instead of generating a random UUID. Previous random DataStore identities are obsolete; clear local app data and development Supabase rows before testing.
 - `ChatAppDatabase` v1 (`chat_app.db`) contains `users`, `messages`, and `message_media`; schema export is enabled.
 - Room message observation is ordered `created_at DESC, id DESC` and combines message/media rows.
 - `MessageEntity` owns Android operational fields: send status, attempt count, and last error.
