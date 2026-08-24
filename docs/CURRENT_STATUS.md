@@ -48,7 +48,7 @@ Branch: `feature/text-messaging`. Repository code is authoritative; check `git s
 - `ChatRoute` collects state/events lifecycle-aware. `ChatScreen` has Material 3 app bar, empty state, message bubbles, composer, snackbar, Light/Dark previews, and disabled-by-default attachment affordance.
 - Messages remain newest-to-oldest in state; `LazyColumn(reverseLayout = true)` puts the newest item at the visual bottom with UUID keys.
 - Outgoing bubbles show `SENDING`, `SENT`, or `FAILED`; failed messages retry through `ChatAction.RetryMessage`.
-- `MainActivity` hosts `ChatAppRoot`. `StartupViewModel` resolves the current UUID/profile through `UserRepository` and keeps Compose `SplashScreen` while resolving. A found profile goes to Chat; a successful empty lookup goes to Profile Setup; a thrown lookup failure shows a generic retry screen instead of treating the user as new. Successful Profile Setup navigates to Chat.
+- `MainActivity` hosts `ChatAppRoot` and keeps the Android SplashScreen API visible until startup resolution finishes. `StartupViewModel` resolves the current UUID/profile through `UserRepository`. A found profile goes to Chat; a successful empty lookup goes to Profile Setup; a thrown lookup failure shows a generic retry screen. While resolving after the system splash (including Retry), a splash-colored screen with a small progress indicator is shown instead of the branded Compose splash. Successful Profile Setup navigates to Chat.
 
 ## Not Implemented
 
