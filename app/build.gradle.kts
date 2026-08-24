@@ -38,6 +38,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":core:domain"))
     implementation(project(":data:chat"))
     implementation(project(":feature:chat"))
     implementation(project(":feature:profile"))

@@ -3,7 +3,9 @@ package com.example.chatapptask.feature.chat.presentation
 import com.example.chatapptask.core.domain.model.Message
 import com.example.chatapptask.core.domain.model.MessageSendStatus
 import com.example.chatapptask.core.domain.model.PendingMedia
+import com.example.chatapptask.core.domain.model.User
 import com.example.chatapptask.core.domain.repository.ChatRepository
+import com.example.chatapptask.core.domain.repository.UserRepository
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
@@ -40,7 +42,7 @@ class ChatViewModelTest {
     @Test
     fun repositoryMessages_areExposedInUiStateWithoutReordering() = runTest(dispatcher) {
         val repository = FakeChatRepository()
-        val viewModel = ChatViewModel(repository)
+        val viewModel = ChatViewModel(repository, FakeUserRepository())
         val messages = listOf(message("00000000-0000-0000-0000-000000000002"), message("00000000-0000-0000-0000-000000000001"))
 
         repository.messages.value = messages
@@ -52,7 +54,7 @@ class ChatViewModelTest {
     @Test
     fun sendText_trimsAndSchedulesExpectedText_thenClearsComposer() = runTest(dispatcher) {
         val repository = FakeChatRepository()
-        val viewModel = ChatViewModel(repository)
+        val viewModel = ChatViewModel(repository, FakeUserRepository())
 
         viewModel.onAction(ChatAction.ComposerTextChanged("  Hello  "))
         viewModel.onAction(ChatAction.SendText)
@@ -67,7 +69,7 @@ class ChatViewModelTest {
     @Test
     fun blankText_doesNotSend() = runTest(dispatcher) {
         val repository = FakeChatRepository()
-        val viewModel = ChatViewModel(repository)
+        val viewModel = ChatViewModel(repository, FakeUserRepository())
 
         viewModel.onAction(ChatAction.ComposerTextChanged("   \n  "))
         viewModel.onAction(ChatAction.SendText)
@@ -79,7 +81,7 @@ class ChatViewModelTest {
     @Test
     fun repeatedSendWhileRequestIsPending_isIgnored() = runTest(dispatcher) {
         val repository = FakeChatRepository()
-        val viewModel = ChatViewModel(repository)
+        val viewModel = ChatViewModel(repository, FakeUserRepository())
 
         viewModel.onAction(ChatAction.ComposerTextChanged("Hello"))
         viewModel.onAction(ChatAction.SendText)
@@ -92,7 +94,7 @@ class ChatViewModelTest {
     @Test
     fun retryMessage_usesExistingUuid() = runTest(dispatcher) {
         val repository = FakeChatRepository()
-        val viewModel = ChatViewModel(repository)
+        val viewModel = ChatViewModel(repository, FakeUserRepository())
         val messageId = UUID.fromString("3dc4cbbb-bf41-4306-ae07-362f6bc59091")
 
         viewModel.onAction(ChatAction.RetryMessage(messageId))
@@ -107,7 +109,7 @@ class ChatViewModelTest {
             val repository = FakeChatRepository().apply {
                 sendFailure = IllegalStateException("scheduler unavailable")
             }
-            val viewModel = ChatViewModel(repository)
+            val viewModel = ChatViewModel(repository, FakeUserRepository())
 
             viewModel.onAction(ChatAction.ComposerTextChanged("Hello"))
             viewModel.onAction(ChatAction.SendText)
@@ -131,6 +133,17 @@ class ChatViewModelTest {
             media = emptyList(),
             sendStatus = MessageSendStatus.SENT,
         )
+
+    @Test
+    fun currentUserId_isExposedForMessageOwnership() = runTest(dispatcher) {
+        val repository = FakeChatRepository()
+        val currentUserId = UUID.fromString("33eed91f-846c-49c8-851d-bca519b01432")
+        val viewModel = ChatViewModel(repository, FakeUserRepository(currentUserId))
+
+        advanceUntilIdle()
+
+        assertEquals(currentUserId, viewModel.uiState.value.currentUserId)
+    }
 }
 
 private class FakeChatRepository : ChatRepository {
@@ -160,6 +173,18 @@ private class FakeChatRepository : ChatRepository {
     override suspend fun retryMediaItem(messageId: UUID, mediaId: UUID) = unused()
     override suspend fun startRealtimeSync() = unused()
     override suspend fun stopRealtimeSync() = unused()
+}
+
+private class FakeUserRepository(
+    private val currentUserId: UUID = UUID.fromString("33eed91f-846c-49c8-851d-bca519b01432"),
+) : UserRepository {
+    override suspend fun getCurrentUserId(): UUID = currentUserId
+
+    override suspend fun getUser(userId: UUID): User? = unused()
+
+    override fun observeUser(userId: UUID): Flow<User?> = unused()
+
+    override suspend fun upsertUser(user: User) = unused()
 }
 
 private fun unused(): Nothing = error("Not used by this test.")

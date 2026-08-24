@@ -1,0 +1,84 @@
+---
+description: Read project handoff context before narrowly inspecting source
+alwaysApply: true
+---
+
+# Repository Context
+
+## Context First
+
+- Read relevant files in `docs/` before starting a task.
+- Treat `docs/CURRENT_STATUS.md` and `docs/NEXT_STEPS.md` as the primary handoff context.
+- Then inspect only source files directly relevant to the current task.
+- Avoid repeated full-repository audits or broad searches when the docs already provide sufficient context.
+- Do not repeatedly inspect files whose relevant behavior is already documented unless the current task requires changing or verifying them.
+- Repository code is the source of truth. If documentation and code disagree, follow the code and correct the documentation.
+
+## Architecture
+
+- Preserve the module boundaries and Room-as-source-of-truth flow described in `docs/CURRENT_STATUS.md` unless a task explicitly changes them.
+- Feature modules must not directly access Room, Supabase, WorkManager, DataStore, or other infrastructure when an existing domain/repository boundary should be used.
+- Reuse existing implementations and abstractions before creating new ones.
+- Do not redesign working architecture unless the current task explicitly requires it.
+- Do not implement unrelated future features while completing the current task.
+
+## Scope and Token Efficiency
+
+- Work only on the explicitly requested task.
+- Prefer targeted file inspection over repository-wide analysis.
+- Do not perform broad searches unless required to resolve an actual unknown.
+- Do not re-explain or rediscover architecture already documented in `docs/`.
+- Avoid speculative refactoring, cleanup, dependency changes, or abstractions unrelated to the current task.
+- Keep implementation reports concise and focused on changes that matter.
+
+## Verification Policy
+
+To minimize agent token and tool usage:
+
+- Do NOT run a full Gradle build automatically.
+- Do NOT run Gradle Sync automatically.
+- Do NOT run `clean` automatically.
+- Do NOT run lint automatically.
+- Do NOT run Gradle tests automatically unless explicitly requested.
+- Do NOT launch an emulator or run the app automatically.
+- Do NOT repeatedly retry Gradle or environment operations.
+
+After implementation, report instead:
+
+1. Whether Android Studio Gradle Sync is required.
+2. The smallest useful Gradle command the developer should run manually, if any.
+3. Whether a full build is actually necessary.
+4. Any tests that should be run manually.
+5. What should be manually verified on the emulator/device.
+
+Only run builds, tests, lint, sync-related commands, or other expensive verification when the developer explicitly requests it.
+
+## Git
+
+- Do not commit or push unless explicitly requested.
+- Do not rewrite Git history.
+- Do not change branches unless explicitly requested.
+- At the end of an implementation task, report the final Git status concisely.
+
+## Handoff Documentation
+
+- Update `docs/CURRENT_STATUS.md` when a completed change materially changes the implemented project state.
+- Update `docs/NEXT_STEPS.md` when the next real implementation task changes.
+- Keep handoff documentation concise and factual.
+- Do not duplicate large amounts of source code into documentation.
+- Documentation should help the next Cursor/Codex session avoid rediscovering the repository.
+
+## Task Completion Report
+
+After an implementation task, keep the final report concise and include:
+
+- Files changed.
+- What was implemented.
+- Important architectural decisions, if any.
+- Whether Gradle Sync is required.
+- Smallest recommended manual verification command.
+- Whether a full build is necessary.
+- Manual emulator/device checks.
+- Final Git status.
+
+Do not run the verification commands yourself unless explicitly requested.

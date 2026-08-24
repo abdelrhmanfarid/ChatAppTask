@@ -5,6 +5,7 @@ import java.util.UUID
 
 data class ChatUiState(
     val messages: List<Message> = emptyList(),
+    val currentUserId: UUID? = null,
     val composerText: String = "",
     val isSendRequestInProgress: Boolean = false,
 )
