@@ -1,6 +1,7 @@
 package com.example.chatapptask.data.chat.repository
 
 import com.example.chatapptask.core.common.identity.UserIdentityStore
+import com.example.chatapptask.core.domain.model.MediaType
 import com.example.chatapptask.core.domain.model.MediaUploadStatus
 import com.example.chatapptask.core.domain.model.Message
 import com.example.chatapptask.core.domain.model.MessageMedia
@@ -184,6 +185,148 @@ class DefaultChatRepositoryTest {
     }
 
     @Test
+    fun loadLatestMessages_persistsRemotePageAsSentWithUsersAndMedia() = runBlocking {
+        val events = mutableListOf<String>()
+        val sender = remoteUser(senderId)
+        val otherSenderId = UUID.fromString("44eed91f-846c-49c8-851d-bca519b01432")
+        val otherSender = remoteUser(otherSenderId)
+        val messageId = UUID.fromString("11111111-1111-1111-1111-111111111111")
+        val mediaMessageId = UUID.fromString("22222222-2222-2222-2222-222222222222")
+        val media = listOf(
+            remoteMedia(mediaMessageId, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", 0),
+            remoteMedia(mediaMessageId, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", 1),
+        )
+        val local = RecordingLocalDataSource(events)
+        val remote = RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt).apply {
+            usersById[sender.id] = sender
+            usersById[otherSender.id] = otherSender
+            latestMessages = listOf(
+                remoteMessage(
+                    id = messageId,
+                    senderId = senderId,
+                    text = "Latest text",
+                    status = MessageSendStatus.SENDING,
+                ),
+                remoteMessage(
+                    id = mediaMessageId,
+                    senderId = otherSenderId,
+                    text = null,
+                    status = MessageSendStatus.FAILED,
+                    media = media,
+                ),
+            )
+        }
+        val repository = createRepository(local, remote, RecordingTextMessageSendScheduler(events))
+
+        repository.loadLatestMessages(20)
+
+        assertEquals(20, remote.latestLimit)
+        assertEquals(listOf(senderId, otherSenderId), remote.requestedUserIds)
+        assertEquals(listOf(sender, otherSender), local.upsertedUsers)
+        val persisted = local.upsertedMessagePages.single()
+        assertEquals(listOf(messageId, mediaMessageId), persisted.map(Message::id))
+        assertTrue(persisted.all { message -> message.sendStatus == MessageSendStatus.SENT })
+        assertEquals(media, persisted[1].media)
+        assertEquals(
+            listOf("remote:latest", "remote:getUser", "remote:getUser", "local:upsertUsers", "local:upsertMessages"),
+            events,
+        )
+    }
+
+    @Test
+    fun loadOlderMessages_passesCursorAndPersistsRemotePage() = runBlocking {
+        val events = mutableListOf<String>()
+        val cursorCreatedAt = Instant.parse("2026-08-23T12:00:00Z")
+        val cursorMessageId = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1")
+        val olderMessageId = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa0")
+        val sender = remoteUser(senderId)
+        val local = RecordingLocalDataSource(events).apply { seedUser(sender) }
+        val remote = RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt).apply {
+            olderMessages = listOf(
+                remoteMessage(
+                    id = olderMessageId,
+                    senderId = senderId,
+                    text = "Older text",
+                    status = MessageSendStatus.SENT,
+                    createdAt = Instant.parse("2026-08-23T11:59:59Z"),
+                ),
+            )
+        }
+        val repository = createRepository(local, remote, RecordingTextMessageSendScheduler(events))
+
+        repository.loadOlderMessages(
+            oldestCreatedAt = cursorCreatedAt,
+            oldestMessageId = cursorMessageId,
+            limit = 10,
+        )
+
+        assertEquals(cursorCreatedAt, remote.olderCursorCreatedAt)
+        assertEquals(cursorMessageId, remote.olderCursorMessageId)
+        assertEquals(10, remote.olderLimit)
+        assertTrue(remote.requestedUserIds.isEmpty())
+        assertEquals(listOf(olderMessageId), local.upsertedMessagePages.single().map(Message::id))
+        assertEquals(
+            listOf("remote:older", "local:upsertMessages"),
+            events,
+        )
+    }
+
+    @Test
+    fun loadLatestMessages_duplicateUuid_upsertsSameIdAgain() = runBlocking {
+        val events = mutableListOf<String>()
+        val messageId = UUID.fromString("33333333-3333-3333-3333-333333333333")
+        val sender = remoteUser(senderId)
+        val existing = remoteMessage(
+            id = messageId,
+            senderId = senderId,
+            text = "First",
+            status = MessageSendStatus.SENT,
+        )
+        val duplicate = existing.copy(textContent = "Updated remotely")
+        val local = RecordingLocalDataSource(events).apply { seedUser(sender) }
+        val remote = RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt)
+        val repository = createRepository(local, remote, RecordingTextMessageSendScheduler(events))
+
+        remote.latestMessages = listOf(existing)
+        repository.loadLatestMessages()
+        remote.latestMessages = listOf(duplicate)
+        repository.loadLatestMessages()
+
+        assertEquals(listOf(messageId), local.messagesById.keys.toList())
+        assertEquals("Updated remotely", local.messagesById.getValue(messageId).textContent)
+        assertEquals(2, local.upsertedMessagePages.size)
+        assertEquals(messageId, local.upsertedMessagePages[0].single().id)
+        assertEquals(messageId, local.upsertedMessagePages[1].single().id)
+    }
+
+    @Test
+    fun loadLatestMessages_remoteFailure_keepsExistingLocalData() = runBlocking {
+        val events = mutableListOf<String>()
+        val failure = IllegalStateException("network unavailable")
+        val existing = persistedTextMessage(
+            UUID.fromString("44444444-4444-4444-4444-444444444444"),
+            MessageSendStatus.SENT,
+        )
+        val local = RecordingLocalDataSource(events).apply { seedMessage(existing) }
+        val remote = RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt, failure)
+        val repository = createRepository(local, remote, RecordingTextMessageSendScheduler(events))
+        var thrown: Throwable? = null
+
+        try {
+            repository.loadLatestMessages()
+        } catch (exception: Throwable) {
+            thrown = exception
+        }
+
+        assertSame(failure, thrown)
+        assertEquals(existing, local.currentMessage)
+        assertTrue(local.upsertedMessagePages.isEmpty())
+        assertTrue(local.upsertedUsers.isEmpty())
+        assertEquals(0, local.upsertCount)
+        assertEquals(listOf("remote:latest"), events)
+    }
+
+    @Test
     fun sendPersistedTextMessage_failureThenRetry_countsBothAttemptsWithSameId() = runBlocking {
         val events = mutableListOf<String>()
         val failure = IllegalStateException("network unavailable")
@@ -239,6 +382,49 @@ class DefaultChatRepositoryTest {
             media = emptyList(),
             sendStatus = status,
         )
+
+    private fun remoteUser(userId: UUID): User =
+        User(
+            id = userId,
+            username = "user-$userId",
+            profileImagePath = null,
+            age = null,
+            createdAt = Instant.parse("2026-08-23T11:00:00Z"),
+            updatedAt = Instant.parse("2026-08-23T11:00:00Z"),
+        )
+
+    private fun remoteMessage(
+        id: UUID,
+        senderId: UUID,
+        text: String?,
+        status: MessageSendStatus,
+        createdAt: Instant = serverCreatedAt,
+        media: List<MessageMedia> = emptyList(),
+    ): Message =
+        Message(
+            id = id,
+            senderId = senderId,
+            textContent = text,
+            createdAt = createdAt,
+            updatedAt = createdAt,
+            media = media,
+            sendStatus = status,
+        )
+
+    private fun remoteMedia(messageId: UUID, mediaId: String, position: Int): MessageMedia =
+        MessageMedia(
+            id = UUID.fromString(mediaId),
+            messageId = messageId,
+            storagePath = "$messageId/$mediaId.jpg",
+            mediaType = MediaType.IMAGE,
+            mimeType = "image/jpeg",
+            position = position,
+            sizeBytes = 12L,
+            width = 100,
+            height = 80,
+            localUri = null,
+            uploadStatus = MediaUploadStatus.UPLOADED,
+        )
 }
 
 private data class SendStateUpdate(
@@ -273,6 +459,10 @@ private class RecordingLocalDataSource(
     var upsertCount = 0
     var sendAttemptCount = 0
     val stateUpdates = mutableListOf<SendStateUpdate>()
+    val upsertedMessagePages = mutableListOf<List<Message>>()
+    val upsertedUsers = mutableListOf<User>()
+    val messagesById = mutableMapOf<UUID, Message>()
+    private val usersById = mutableMapOf<UUID, User>()
 
     override suspend fun upsertMessage(message: Message) {
         upsertCount += 1
@@ -284,7 +474,12 @@ private class RecordingLocalDataSource(
 
     fun seedMessage(message: Message, attemptCount: Int = 1) {
         currentMessage = message
+        messagesById[message.id] = message
         sendAttemptCount = attemptCount
+    }
+
+    fun seedUser(user: User) {
+        usersById[user.id] = user
     }
 
     override suspend fun beginMessageSendAttempt(messageId: UUID) {
@@ -314,14 +509,22 @@ private class RecordingLocalDataSource(
     }
 
     override suspend fun getMessageById(messageId: UUID): Message? =
-        currentMessage?.takeIf { it.id == messageId }
+        currentMessage?.takeIf { it.id == messageId } ?: messagesById[messageId]
 
     override fun observeMessages(): Flow<List<Message>> = emptyFlow()
     override suspend fun upsertUser(user: User) = unused()
-    override suspend fun upsertUsers(users: List<User>) = unused()
-    override suspend fun getUserById(userId: UUID): User? = unused()
+    override suspend fun upsertUsers(users: List<User>) {
+        users.forEach { user -> usersById[user.id] = user }
+        upsertedUsers += users
+        events += "local:upsertUsers"
+    }
+    override suspend fun getUserById(userId: UUID): User? = usersById[userId]
     override fun observeUserById(userId: UUID): Flow<User?> = unused()
-    override suspend fun upsertMessages(messages: List<Message>) = unused()
+    override suspend fun upsertMessages(messages: List<Message>) {
+        upsertedMessagePages += messages
+        messages.forEach { message -> messagesById[message.id] = message }
+        events += "local:upsertMessages"
+    }
     override suspend fun getLatestMessages(limit: Int): List<Message> = unused()
     override suspend fun getOlderMessages(
         cursorCreatedAt: Instant,
@@ -361,6 +564,14 @@ private class RecordingRemoteDataSource(
     var attemptCountProvider: (() -> Int)? = null
     val attemptCountsAtInsert = mutableListOf<Int>()
     val messageIds = mutableListOf<UUID>()
+    var latestMessages: List<Message> = emptyList()
+    var olderMessages: List<Message> = emptyList()
+    var latestLimit: Int? = null
+    var olderCursorCreatedAt: Instant? = null
+    var olderCursorMessageId: UUID? = null
+    var olderLimit: Int? = null
+    val usersById = mutableMapOf<UUID, User>()
+    val requestedUserIds = mutableListOf<UUID>()
 
     override suspend fun insertTextMessage(
         messageId: UUID,
@@ -383,13 +594,29 @@ private class RecordingRemoteDataSource(
     }
 
     override suspend fun upsertUser(user: User): User = unused()
-    override suspend fun getUser(userId: UUID): User? = unused()
-    override suspend fun getLatestMessages(limit: Int): List<Message> = unused()
+    override suspend fun getUser(userId: UUID): User? {
+        events += "remote:getUser"
+        requestedUserIds += userId
+        return usersById[userId]
+    }
+    override suspend fun getLatestMessages(limit: Int): List<Message> {
+        events += "remote:latest"
+        latestLimit = limit
+        failure?.let { throw it }
+        return latestMessages
+    }
     override suspend fun getOlderMessages(
         cursorCreatedAt: Instant,
         cursorMessageId: UUID,
         limit: Int,
-    ): List<Message> = unused()
+    ): List<Message> {
+        events += "remote:older"
+        olderCursorCreatedAt = cursorCreatedAt
+        olderCursorMessageId = cursorMessageId
+        olderLimit = limit
+        failure?.let { throw it }
+        return olderMessages
+    }
     override suspend fun createMediaMessage(
         messageId: UUID,
         senderId: UUID,

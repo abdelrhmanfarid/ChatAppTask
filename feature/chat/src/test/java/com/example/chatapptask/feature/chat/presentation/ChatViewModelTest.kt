@@ -144,6 +144,34 @@ class ChatViewModelTest {
 
         assertEquals(currentUserId, viewModel.uiState.value.currentUserId)
     }
+
+    @Test
+    fun start_loadsLatestMessagesOnce() = runTest(dispatcher) {
+        val repository = FakeChatRepository()
+        ChatViewModel(repository, FakeUserRepository())
+
+        advanceUntilIdle()
+
+        assertEquals(1, repository.loadLatestCount)
+    }
+
+    @Test
+    fun latestLoadFailure_emitsErrorAndKeepsObservedMessages() = runTest(dispatcher) {
+        val existing = message("00000000-0000-0000-0000-000000000001")
+        val repository = FakeChatRepository().apply {
+            messages.value = listOf(existing)
+            loadLatestFailure = IllegalStateException("network unavailable")
+        }
+        val viewModel = ChatViewModel(repository, FakeUserRepository())
+
+        advanceUntilIdle()
+
+        assertEquals(
+            ChatEvent.ShowError("network unavailable"),
+            viewModel.events.first(),
+        )
+        assertEquals(listOf(existing), viewModel.uiState.value.messages)
+    }
 }
 
 private class FakeChatRepository : ChatRepository {
@@ -151,6 +179,8 @@ private class FakeChatRepository : ChatRepository {
     val sentTexts = mutableListOf<String>()
     val retriedMessageIds = mutableListOf<UUID>()
     var sendFailure: Exception? = null
+    var loadLatestCount = 0
+    var loadLatestFailure: Exception? = null
 
     override fun observeMessages(): Flow<List<Message>> = messages
 
@@ -163,7 +193,10 @@ private class FakeChatRepository : ChatRepository {
         retriedMessageIds += messageId
     }
 
-    override suspend fun loadLatestMessages(limit: Int) = unused()
+    override suspend fun loadLatestMessages(limit: Int) {
+        loadLatestCount += 1
+        loadLatestFailure?.let { throw it }
+    }
     override suspend fun loadOlderMessages(
         oldestCreatedAt: Instant,
         oldestMessageId: UUID,

@@ -42,19 +42,19 @@ Branch: `feature/text-messaging`. Repository code is authoritative; check `git s
 - `SupabaseChatRemoteDataSource` implements users, text insert, message queries, media RPC/storage primitives, and DTO mapping.
 - `DefaultUserRepository` is local-first for lookup, caches remote users, and upserts remote then Room.
 - Profile Setup saves username plus optional positive integer age. Optional profile photo uses the system Photo Picker, local preview, then Storage upload of `{userId}/avatar.{ext}` into bucket `profile-images` before user upsert. Keyboard uses Scaffold `safeDrawing` only (no extra `imePadding`).
+- `DefaultChatRepository.loadLatestMessages` / `loadOlderMessages` fetch existing remote pages (`created_at DESC, id DESC`; older uses `created_at < cursor` OR same timestamp and `id < cursor`), mark messages `SENT`, upsert missing senders then messages/media into Room, and leave existing Room rows untouched when a fetch fails. Duplicate UUIDs are upserted by primary key. Chat UI still only observes Room.
 
 ### Presentation
 
-- `ChatViewModel` observes Room messages unchanged, owns composer state, schedules sends, retries by existing UUID, exposes current user ID via `UserRepository`, and emits one-time errors.
-- `ChatRoute` collects state/events lifecycle-aware. `ChatScreen` has Material 3 app bar, empty state, message bubbles, composer, snackbar, Light/Dark previews, and disabled-by-default attachment affordance.
+- `ChatViewModel` observes Room messages unchanged, loads the latest remote page once at start, owns composer state, schedules sends, retries by existing UUID, exposes current user ID via `UserRepository`, and emits one-time errors.
+- `ChatRoute` collects state/events lifecycle-aware. `ChatScreen` has Material 3 app bar, empty state, message bubbles, composer, snackbar, Light/Dark previews, disabled-by-default attachment affordance, and `clearFocusOnTap()` on chat content.
 - Messages remain newest-to-oldest in state; `LazyColumn(reverseLayout = true)` puts the newest item at the visual bottom with UUID keys.
 - Outgoing bubbles show `SENDING`, `SENT`, or `FAILED`; failed messages retry through `ChatAction.RetryMessage`.
 - `MainActivity` hosts `ChatAppRoot` and keeps the Android SplashScreen API visible until startup resolution finishes. `StartupViewModel` resolves the current UUID/profile through `UserRepository`. A found profile goes to Chat; a successful empty lookup goes to Profile Setup; a thrown lookup failure shows a generic retry screen. While resolving after the system splash (including Retry), a splash-colored screen with a small progress indicator is shown instead of the branded Compose splash. Successful Profile Setup navigates to Chat.
 
 ## Not Implemented
 
-- `DefaultChatRepository.loadLatestMessages` and `loadOlderMessages` orchestration; both currently throw unsupported-operation errors.
-- Pagination UI/triggering and initial remote-to-Room message synchronization.
+- Chat UI older-page pagination triggers (`loadOlderMessages` is implemented in the repository only).
 - Realtime synchronization (`startRealtimeSync`/`stopRealtimeSync` are unsupported); installing the plugin alone does not sync data.
 - Media repository orchestration, media worker/retry flow, picker/permissions, upload UI, and media rendering.
 - Supabase Auth, FCM, presence, typing indicators, and read receipts.

@@ -43,6 +43,16 @@ class ChatViewModel @Inject constructor(
                 _uiState.update { state -> state.copy(messages = messages) }
             }
         }
+
+        viewModelScope.launch {
+            try {
+                chatRepository.loadLatestMessages()
+            } catch (exception: Exception) {
+                eventChannel.send(
+                    ChatEvent.ShowError(exception.message ?: LOAD_ERROR_MESSAGE),
+                )
+            }
+        }
     }
 
     fun onAction(action: ChatAction) {
@@ -95,5 +105,6 @@ class ChatViewModel @Inject constructor(
         const val SEND_ERROR_MESSAGE = "Unable to schedule the message."
         const val RETRY_ERROR_MESSAGE = "Unable to schedule the retry."
         const val IDENTITY_ERROR_MESSAGE = "Unable to identify the current user."
+        const val LOAD_ERROR_MESSAGE = "Unable to load messages."
     }
 }

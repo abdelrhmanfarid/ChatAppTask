@@ -22,13 +22,23 @@ class DefaultChatRepository @Inject constructor(
 ) : ChatRepository {
     override fun observeMessages(): Flow<List<Message>> = localDataSource.observeMessages()
 
-    override suspend fun loadLatestMessages(limit: Int) = unsupported("loadLatestMessages")
+    override suspend fun loadLatestMessages(limit: Int) {
+        persistRemoteMessagePage(remoteDataSource.getLatestMessages(limit))
+    }
 
     override suspend fun loadOlderMessages(
         oldestCreatedAt: Instant,
         oldestMessageId: UUID,
         limit: Int,
-    ) = unsupported("loadOlderMessages")
+    ) {
+        persistRemoteMessagePage(
+            remoteDataSource.getOlderMessages(
+                cursorCreatedAt = oldestCreatedAt,
+                cursorMessageId = oldestMessageId,
+                limit = limit,
+            ),
+        )
+    }
 
     override suspend fun sendTextMessage(text: String) {
         val messageId = UUID.randomUUID()
@@ -118,6 +128,31 @@ class DefaultChatRepository @Inject constructor(
     override suspend fun startRealtimeSync() = unsupported("startRealtimeSync")
 
     override suspend fun stopRealtimeSync() = unsupported("stopRealtimeSync")
+
+    private suspend fun persistRemoteMessagePage(messages: List<Message>) {
+        if (messages.isEmpty()) return
+
+        val sentMessages = messages.map { message ->
+            message.copy(sendStatus = MessageSendStatus.SENT)
+        }
+        persistSenders(sentMessages)
+        localDataSource.upsertMessages(sentMessages)
+    }
+
+    private suspend fun persistSenders(messages: List<Message>) {
+        val usersToUpsert = messages.map { message -> message.senderId }
+            .distinct()
+            .mapNotNull { senderId ->
+                if (localDataSource.getUserById(senderId) != null) {
+                    null
+                } else {
+                    remoteDataSource.getUser(senderId)
+                }
+            }
+        if (usersToUpsert.isNotEmpty()) {
+            localDataSource.upsertUsers(usersToUpsert)
+        }
+    }
 
     private fun unsupported(operation: String): Nothing =
         throw UnsupportedOperationException("$operation is not implemented yet.")

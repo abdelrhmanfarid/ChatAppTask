@@ -58,6 +58,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.example.chatapptask.core.domain.model.Message
 import com.example.chatapptask.core.domain.model.MessageSendStatus
+import com.example.chatapptask.core.ui.clearFocusOnTap
 import com.example.chatapptask.feature.chat.R
 import java.time.Instant
 import java.time.ZoneId
@@ -133,30 +134,31 @@ fun ChatScreen(
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { contentPadding ->
-        if (state.messages.isEmpty()) {
-            EmptyChatState(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(contentPadding),
-            )
-        } else {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(contentPadding),
-                reverseLayout = true,
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                items(
-                    items = state.messages,
-                    key = { message -> message.id },
-                ) { message ->
-                    MessageBubble(
-                        message = message,
-                        isOutgoing = state.currentUserId == message.senderId,
-                        onRetry = { onAction(ChatAction.RetryMessage(message.id)) },
-                    )
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(contentPadding)
+                .clearFocusOnTap(),
+        ) {
+            if (state.messages.isEmpty()) {
+                EmptyChatState(modifier = Modifier.fillMaxSize())
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    reverseLayout = true,
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(
+                        items = state.messages,
+                        key = { message -> message.id },
+                    ) { message ->
+                        MessageBubble(
+                            message = message,
+                            isOutgoing = state.currentUserId == message.senderId,
+                            onRetry = { onAction(ChatAction.RetryMessage(message.id)) },
+                        )
+                    }
                 }
             }
         }
