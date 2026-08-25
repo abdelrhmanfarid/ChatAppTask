@@ -42,7 +42,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -137,6 +139,8 @@ fun ChatScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { contentPadding ->
         val listState = rememberLazyListState()
+        val newestMessage = state.messages.firstOrNull()
+        var previousNewestMessageId by remember { mutableStateOf<UUID?>(null) }
         val reachedOldestLoaded by remember(state.messages.size) {
             derivedStateOf {
                 val lastVisibleIndex = listState.layoutInfo.visibleItemsInfo
@@ -144,6 +148,18 @@ fun ChatScreen(
                     ?: return@derivedStateOf false
                 val oldestMessageIndex = state.messages.lastIndex
                 oldestMessageIndex >= 0 && lastVisibleIndex >= oldestMessageIndex
+            }
+        }
+
+        LaunchedEffect(newestMessage?.id, newestMessage?.sendStatus, state.currentUserId) {
+            val shouldScroll = shouldScrollToOutgoingOptimisticMessage(
+                previousNewestMessageId = previousNewestMessageId,
+                newestMessage = newestMessage,
+                currentUserId = state.currentUserId,
+            )
+            previousNewestMessageId = newestMessage?.id
+            if (shouldScroll) {
+                listState.animateScrollToItem(0)
             }
         }
 
@@ -353,12 +369,13 @@ fun ChatComposer(
                 value = text,
                 onValueChange = onTextChanged,
                 modifier = Modifier.weight(1f),
-                enabled = !isSending,
                 placeholder = { Text(stringResource(R.string.chat_composer_placeholder)) },
                 minLines = 1,
                 maxLines = 4,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { if (canSend) onSend() }),
+                keyboardActions = KeyboardActions(
+                    onSend = { if (canSend) onSend() },
+                ),
             )
             Spacer(Modifier.width(8.dp))
             Button(
@@ -423,6 +440,17 @@ private fun EmptyChatState(modifier: Modifier = Modifier) {
 }
 
 private const val OLDER_LOADING_ITEM_KEY = "older-messages-loading"
+
+internal fun shouldScrollToOutgoingOptimisticMessage(
+    previousNewestMessageId: UUID?,
+    newestMessage: Message?,
+    currentUserId: UUID?,
+): Boolean {
+    if (newestMessage == null || currentUserId == null) return false
+    if (newestMessage.id == previousNewestMessageId) return false
+    if (newestMessage.senderId != currentUserId) return false
+    return newestMessage.sendStatus == MessageSendStatus.SENDING
+}
 
 private fun Instant.toDisplayTime(): String =
     DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)
