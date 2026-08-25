@@ -17,6 +17,7 @@ import com.example.chatapptask.data.chat.worker.TextMessageSendScheduler
 import com.example.chatapptask.data.chat.worker.TextMessageScheduleReason
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.emptyFlow
@@ -438,10 +439,12 @@ class DefaultChatRepositoryTest {
     }
 
     @Test
-    fun sendPersistedMediaMessage_validatesAndBeginsAttempt_withoutRemoteOrSent() = runBlocking {
+    fun sendPersistedMediaMessage_uploadsThenCreatesRemoteAndReconcilesSent() = runBlocking {
         val events = mutableListOf<String>()
+        val progress = mutableListOf<Pair<Int, Int>>()
         val messageId = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
         val mediaId = UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+        val store = RecordingOutgoingMediaStore(events)
         val local = RecordingLocalDataSource(events).apply {
             seedMessage(
                 persistedMediaMessage(messageId, listOf(localMedia(messageId, mediaId, 0))),
@@ -453,15 +456,38 @@ class DefaultChatRepositoryTest {
             local,
             remote,
             RecordingTextMessageSendScheduler(events),
+            store,
         )
 
-        repository.sendPersistedMediaMessage(messageId)
+        repository.sendPersistedMediaMessage(messageId) { current, total ->
+            progress += current to total
+        }
 
         val message = requireNotNull(local.currentMessage)
         assertEquals(1, local.sendAttemptCount)
-        assertEquals(MessageSendStatus.SENDING, message.sendStatus)
-        assertTrue(remote.messageIds.isEmpty())
-        assertEquals(listOf("local:SENDING"), events)
+        assertEquals(MessageSendStatus.SENT, message.sendStatus)
+        assertEquals(serverCreatedAt, message.createdAt)
+        assertEquals(listOf(mediaId), remote.uploadedMedia.map { item -> item.mediaId })
+        assertEquals("$messageId/$mediaId.jpg", remote.uploadedMedia.single().storagePath)
+        assertEquals(listOf(mediaId), remote.createdMediaMessages.single().media.map { item -> item.id })
+        assertEquals(MediaUploadStatus.UPLOADED, message.media.single().uploadStatus)
+        assertEquals("$messageId/$mediaId.jpg", message.media.single().storagePath)
+        assertEquals(listOf(1 to 1), progress)
+        assertEquals(listOf(messageId), store.deletedMessageIds)
+        assertEquals(setOf(messageId), local.messagesById.keys)
+        assertEquals(
+            listOf(
+                "local:SENDING",
+                "local:media-UPLOADING",
+                "remote:upload",
+                "local:media-UPLOADED",
+                "remote:getMessage",
+                "remote:createMedia",
+                "local:SENT",
+                "store:delete",
+            ),
+            events,
+        )
     }
 
     @Test
@@ -571,6 +597,443 @@ class DefaultChatRepositoryTest {
 
         assertTrue(thrown is PersistedMediaLocalFileMissingException)
         assertEquals(0, local.sendAttemptCount)
+    }
+
+    @Test
+    fun sendPersistedMediaMessage_uploadsMultipleAttachmentsInPositionOrder() = runBlocking {
+        val events = mutableListOf<String>()
+        val progress = mutableListOf<Pair<Int, Int>>()
+        val messageId = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1")
+        val firstId = UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1")
+        val secondId = UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb2")
+        val local = RecordingLocalDataSource(events).apply {
+            seedMessage(
+                persistedMediaMessage(
+                    messageId,
+                    listOf(
+                        localMedia(messageId, firstId, 0),
+                        localMedia(messageId, secondId, 1),
+                    ),
+                ),
+                attemptCount = 0,
+            )
+        }
+        val remote = RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt)
+        val repository = createRepository(
+            local,
+            remote,
+            RecordingTextMessageSendScheduler(events),
+        )
+
+        repository.sendPersistedMediaMessage(messageId) { current, total ->
+            progress += current to total
+        }
+
+        assertEquals(listOf(firstId, secondId), remote.uploadedMedia.map { item -> item.mediaId })
+        assertEquals(
+            listOf("$messageId/$firstId.jpg", "$messageId/$secondId.jpg"),
+            remote.uploadedMedia.map { item -> item.storagePath },
+        )
+        assertEquals(listOf(1 to 2, 2 to 2), progress)
+        assertEquals(MessageSendStatus.SENT, requireNotNull(local.currentMessage).sendStatus)
+        assertEquals(1, remote.createdMediaMessages.size)
+    }
+
+    @Test
+    fun sendPersistedMediaMessage_skipsAlreadyUploadedAttachmentAndReusesPath() = runBlocking {
+        val events = mutableListOf<String>()
+        val messageId = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2")
+        val uploadedId = UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb3")
+        val pendingId = UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb4")
+        val existingPath = "$messageId/$uploadedId.jpg"
+        val local = RecordingLocalDataSource(events).apply {
+            seedMessage(
+                persistedMediaMessage(
+                    messageId,
+                    listOf(
+                        localMedia(
+                            messageId,
+                            uploadedId,
+                            0,
+                            storagePath = existingPath,
+                            uploadStatus = MediaUploadStatus.UPLOADED,
+                        ),
+                        localMedia(messageId, pendingId, 1),
+                    ),
+                ),
+                attemptCount = 0,
+            )
+        }
+        val remote = RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt)
+        val repository = createRepository(
+            local,
+            remote,
+            RecordingTextMessageSendScheduler(events),
+        )
+
+        repository.sendPersistedMediaMessage(messageId)
+
+        assertEquals(listOf(pendingId), remote.uploadedMedia.map { item -> item.mediaId })
+        val created = remote.createdMediaMessages.single().media
+        assertEquals(listOf(uploadedId, pendingId), created.map { item -> item.id })
+        assertEquals(existingPath, created[0].storagePath)
+        assertEquals("$messageId/$pendingId.jpg", created[1].storagePath)
+        assertTrue(requireNotNull(local.currentMessage).media.all { item ->
+            item.uploadStatus == MediaUploadStatus.UPLOADED
+        })
+    }
+
+    @Test
+    fun sendPersistedMediaMessage_partialUploadFailure_keepsSuccessfulAttachment() = runBlocking {
+        val events = mutableListOf<String>()
+        val messageId = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa3")
+        val firstId = UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb5")
+        val secondId = UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb6")
+        val failure = IllegalStateException("storage unavailable")
+        val local = RecordingLocalDataSource(events).apply {
+            seedMessage(
+                persistedMediaMessage(
+                    messageId,
+                    listOf(
+                        localMedia(messageId, firstId, 0),
+                        localMedia(messageId, secondId, 1),
+                    ),
+                ),
+                attemptCount = 0,
+            )
+        }
+        val remote = RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt).apply {
+            uploadFailureMediaId = secondId
+            uploadFailure = failure
+        }
+        val repository = createRepository(
+            local,
+            remote,
+            RecordingTextMessageSendScheduler(events),
+        )
+        var thrown: Throwable? = null
+
+        try {
+            repository.sendPersistedMediaMessage(messageId)
+        } catch (exception: Throwable) {
+            thrown = exception
+        }
+
+        assertSame(failure, thrown)
+        val media = requireNotNull(local.currentMessage).media.sortedBy(MessageMedia::position)
+        assertEquals(MediaUploadStatus.UPLOADED, media[0].uploadStatus)
+        assertEquals("$messageId/$firstId.jpg", media[0].storagePath)
+        assertEquals(MediaUploadStatus.FAILED, media[1].uploadStatus)
+        assertEquals(MessageSendStatus.FAILED, requireNotNull(local.currentMessage).sendStatus)
+        assertTrue(remote.createdMediaMessages.isEmpty())
+        assertEquals(listOf(firstId, secondId), remote.uploadedMedia.map { item -> item.mediaId })
+    }
+
+    @Test
+    fun sendPersistedMediaMessage_retryAfterPartialFailure_uploadsOnlyRemaining() = runBlocking {
+        val events = mutableListOf<String>()
+        val messageId = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa4")
+        val firstId = UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb7")
+        val secondId = UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb8")
+        val local = RecordingLocalDataSource(events).apply {
+            seedMessage(
+                persistedMediaMessage(
+                    messageId,
+                    listOf(
+                        localMedia(messageId, firstId, 0),
+                        localMedia(messageId, secondId, 1),
+                    ),
+                ),
+                attemptCount = 0,
+            )
+        }
+        val remote = RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt).apply {
+            uploadFailureMediaId = secondId
+            uploadFailure = IllegalStateException("storage unavailable")
+        }
+        val repository = createRepository(
+            local,
+            remote,
+            RecordingTextMessageSendScheduler(events),
+        )
+
+        try {
+            repository.sendPersistedMediaMessage(messageId)
+        } catch (_: IllegalStateException) {
+            // Expected first-attempt upload failure.
+        }
+        remote.uploadFailure = null
+        remote.uploadFailureMediaId = null
+        repository.sendPersistedMediaMessage(messageId)
+
+        assertEquals(listOf(firstId, secondId, secondId), remote.uploadedMedia.map { item -> item.mediaId })
+        assertEquals(1, remote.createdMediaMessages.size)
+        assertEquals(
+            listOf(firstId, secondId),
+            remote.createdMediaMessages.single().media.map { item -> item.id },
+        )
+        assertEquals(MessageSendStatus.SENT, requireNotNull(local.currentMessage).sendStatus)
+        assertTrue(requireNotNull(local.currentMessage).media.all { item ->
+            item.uploadStatus == MediaUploadStatus.UPLOADED && item.id in setOf(firstId, secondId)
+        })
+    }
+
+    @Test
+    fun sendPersistedMediaMessage_rpcFailure_preservesUploadedState() = runBlocking {
+        val events = mutableListOf<String>()
+        val messageId = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa5")
+        val mediaId = UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb9")
+        val failure = IllegalStateException("rpc unavailable")
+        val store = RecordingOutgoingMediaStore(events)
+        val local = RecordingLocalDataSource(events).apply {
+            seedMessage(
+                persistedMediaMessage(messageId, listOf(localMedia(messageId, mediaId, 0))),
+                attemptCount = 0,
+            )
+        }
+        val remote = RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt).apply {
+            createMediaFailure = failure
+        }
+        val repository = createRepository(
+            local,
+            remote,
+            RecordingTextMessageSendScheduler(events),
+            store,
+        )
+        var thrown: Throwable? = null
+
+        try {
+            repository.sendPersistedMediaMessage(messageId)
+        } catch (exception: Throwable) {
+            thrown = exception
+        }
+
+        assertSame(failure, thrown)
+        assertEquals(MediaUploadStatus.UPLOADED, requireNotNull(local.currentMessage).media.single().uploadStatus)
+        assertEquals("$messageId/$mediaId.jpg", requireNotNull(local.currentMessage).media.single().storagePath)
+        assertEquals(MessageSendStatus.FAILED, requireNotNull(local.currentMessage).sendStatus)
+        assertTrue(remote.createdMediaMessages.isNotEmpty())
+        assertTrue(store.deletedMessageIds.isEmpty())
+    }
+
+    @Test
+    fun sendPersistedMediaMessage_retryAfterRpcFailure_doesNotReupload() = runBlocking {
+        val messageId = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa6")
+        val mediaId = UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb10")
+        val local = RecordingLocalDataSource(mutableListOf()).apply {
+            seedMessage(
+                persistedMediaMessage(messageId, listOf(localMedia(messageId, mediaId, 0))),
+                attemptCount = 0,
+            )
+        }
+        val remote = RecordingRemoteDataSource(
+            mutableListOf(),
+            serverCreatedAt,
+            serverUpdatedAt,
+        ).apply {
+            createMediaFailure = IllegalStateException("rpc unavailable")
+        }
+        val repository = createRepository(
+            local,
+            remote,
+            RecordingTextMessageSendScheduler(mutableListOf()),
+        )
+
+        try {
+            repository.sendPersistedMediaMessage(messageId)
+        } catch (_: IllegalStateException) {
+            // Expected first-attempt RPC failure.
+        }
+        remote.createMediaFailure = null
+        repository.sendPersistedMediaMessage(messageId)
+
+        assertEquals(listOf(mediaId), remote.uploadedMedia.map { item -> item.mediaId })
+        assertEquals(2, remote.createdMediaMessages.size)
+        assertEquals(messageId, remote.createdMediaMessages[0].messageId)
+        assertEquals(messageId, remote.createdMediaMessages[1].messageId)
+        assertEquals(mediaId, remote.createdMediaMessages[1].media.single().id)
+        assertEquals(MessageSendStatus.SENT, requireNotNull(local.currentMessage).sendStatus)
+    }
+
+    @Test
+    fun sendPersistedMediaMessage_sameUuidsAndDeterministicPathsOnRetry() = runBlocking {
+        val messageId = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa7")
+        val mediaId = UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb11")
+        val local = RecordingLocalDataSource(mutableListOf()).apply {
+            seedMessage(
+                persistedMediaMessage(messageId, listOf(localMedia(messageId, mediaId, 0))),
+                attemptCount = 0,
+            )
+        }
+        val remote = RecordingRemoteDataSource(
+            mutableListOf(),
+            serverCreatedAt,
+            serverUpdatedAt,
+        ).apply {
+            uploadFailure = IllegalStateException("storage unavailable")
+        }
+        val repository = createRepository(
+            local,
+            remote,
+            RecordingTextMessageSendScheduler(mutableListOf()),
+        )
+
+        try {
+            repository.sendPersistedMediaMessage(messageId)
+        } catch (_: IllegalStateException) {
+            // Expected first-attempt upload failure.
+        }
+        remote.uploadFailure = null
+        repository.sendPersistedMediaMessage(messageId)
+
+        assertEquals(listOf(mediaId, mediaId), remote.uploadedMedia.map { item -> item.mediaId })
+        assertTrue(remote.uploadedMedia.all { item -> item.messageId == messageId })
+        assertTrue(remote.uploadedMedia.all { item -> item.storagePath == "$messageId/$mediaId.jpg" })
+        assertEquals(messageId, requireNotNull(local.currentMessage).id)
+        assertEquals(mediaId, requireNotNull(local.currentMessage).media.single().id)
+    }
+
+    @Test
+    fun sendPersistedMediaMessage_cancellation_stopsRemainingUploadsAndSkipsRpc() = runBlocking {
+        val messageId = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa8")
+        val firstId = UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb12")
+        val secondId = UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb13")
+        val local = RecordingLocalDataSource(mutableListOf()).apply {
+            seedMessage(
+                persistedMediaMessage(
+                    messageId,
+                    listOf(
+                        localMedia(messageId, firstId, 0),
+                        localMedia(messageId, secondId, 1),
+                    ),
+                ),
+                attemptCount = 0,
+            )
+        }
+        val remote = RecordingRemoteDataSource(
+            mutableListOf(),
+            serverCreatedAt,
+            serverUpdatedAt,
+        ).apply {
+            cancelOnUploadMediaId = secondId
+        }
+        val repository = createRepository(
+            local,
+            remote,
+            RecordingTextMessageSendScheduler(mutableListOf()),
+        )
+        var thrown: Throwable? = null
+
+        try {
+            repository.sendPersistedMediaMessage(messageId)
+        } catch (exception: Throwable) {
+            thrown = exception
+        }
+
+        assertTrue(thrown is CancellationException)
+        val media = requireNotNull(local.currentMessage).media.sortedBy(MessageMedia::position)
+        assertEquals(MediaUploadStatus.UPLOADED, media[0].uploadStatus)
+        assertEquals(MediaUploadStatus.UPLOADING, media[1].uploadStatus)
+        assertEquals(MessageSendStatus.SENDING, requireNotNull(local.currentMessage).sendStatus)
+        assertTrue(remote.createdMediaMessages.isEmpty())
+        assertEquals(listOf(firstId, secondId), remote.uploadedMedia.map { item -> item.mediaId })
+    }
+
+    @Test
+    fun sendPersistedMediaMessage_existingRemoteMessage_skipsCreateAndReconciles() = runBlocking {
+        val messageId = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa9")
+        val mediaId = UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb14")
+        val local = RecordingLocalDataSource(mutableListOf()).apply {
+            seedMessage(
+                persistedMediaMessage(
+                    messageId,
+                    listOf(
+                        localMedia(
+                            messageId,
+                            mediaId,
+                            0,
+                            storagePath = "$messageId/$mediaId.jpg",
+                            uploadStatus = MediaUploadStatus.UPLOADED,
+                        ),
+                    ),
+                ),
+                attemptCount = 0,
+            )
+        }
+        val remote = RecordingRemoteDataSource(
+            mutableListOf(),
+            serverCreatedAt,
+            serverUpdatedAt,
+        ).apply {
+            completeMessagesById[messageId] = remoteMessage(
+                id = messageId,
+                senderId = senderId,
+                text = null,
+                status = MessageSendStatus.SENT,
+                media = listOf(
+                    localMedia(
+                        messageId,
+                        mediaId,
+                        0,
+                        storagePath = "$messageId/$mediaId.jpg",
+                        uploadStatus = MediaUploadStatus.UPLOADED,
+                    ),
+                ),
+            )
+        }
+        val repository = createRepository(
+            local,
+            remote,
+            RecordingTextMessageSendScheduler(mutableListOf()),
+        )
+
+        repository.sendPersistedMediaMessage(messageId)
+
+        assertTrue(remote.uploadedMedia.isEmpty())
+        assertTrue(remote.createdMediaMessages.isEmpty())
+        assertEquals(MessageSendStatus.SENT, requireNotNull(local.currentMessage).sendStatus)
+    }
+
+    @Test
+    fun startRealtimeSync_existingOptimisticMedia_doesNotReplaceLocalMediaFields() = runBlocking {
+        val events = mutableListOf<String>()
+        val messageId = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa10")
+        val mediaId = UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb15")
+        val localUri = "file:///outgoing-media/$messageId/$mediaId.jpg"
+        val sender = remoteUser(senderId)
+        val local = RecordingLocalDataSource(events).apply {
+            seedUser(sender)
+            seedMessage(
+                persistedMediaMessage(
+                    messageId,
+                    listOf(localMedia(messageId, mediaId, 0, localUri = localUri)),
+                ),
+                attemptCount = 2,
+            )
+        }
+        val remote = RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt).apply {
+            completeMessagesById[messageId] = remoteMessage(
+                id = messageId,
+                senderId = senderId,
+                text = null,
+                status = MessageSendStatus.SENT,
+                media = listOf(remoteMedia(messageId, mediaId.toString(), 0)),
+            )
+        }
+        val repository = createRepository(local, remote, RecordingTextMessageSendScheduler(events))
+        val syncJob = launch { repository.startRealtimeSync() }
+        yield()
+
+        remote.emitRemoteMessageId(messageId)
+        yield()
+
+        repository.stopRealtimeSync()
+        syncJob.join()
+
+        assertTrue(local.upsertedMediaBatches.isEmpty())
+        assertEquals(localUri, requireNotNull(local.currentMessage).media.single().localUri)
+        assertEquals(MessageSendStatus.SENT, requireNotNull(local.currentMessage).sendStatus)
+        assertEquals(2, local.sendAttemptCount)
     }
 
     @Test
@@ -1077,13 +1540,14 @@ class DefaultChatRepositoryTest {
         messageId: UUID,
         mediaId: UUID,
         position: Int,
-        localUri: String = "file:///outgoing-media/$messageId/$mediaId",
+        localUri: String = "file:///outgoing-media/$messageId/$mediaId.jpg",
         uploadStatus: MediaUploadStatus = MediaUploadStatus.PENDING,
+        storagePath: String? = null,
     ): MessageMedia =
         MessageMedia(
             id = mediaId,
             messageId = messageId,
-            storagePath = null,
+            storagePath = storagePath,
             mediaType = MediaType.IMAGE,
             mimeType = "image/jpeg",
             position = position,
@@ -1251,6 +1715,13 @@ private class RecordingOutgoingMediaStore(
 
     override fun hasReadableCopy(localUri: String): Boolean =
         localUri.isNotBlank() && localUri !in unreadableUris
+
+    override fun readCopyBytes(localUri: String): ByteArray {
+        if (localUri in unreadableUris) {
+            error("Outgoing media copy is missing or unreadable.")
+        }
+        return byteArrayOf(1, 2, 3)
+    }
 }
 
 private class RecordingLocalDataSource(
@@ -1266,6 +1737,8 @@ private class RecordingLocalDataSource(
     val upsertedUsers = mutableListOf<User>()
     val messagesById = mutableMapOf<UUID, Message>()
     val deletedMessageIds = mutableListOf<UUID>()
+    val upsertedMediaBatches = mutableListOf<List<MessageMedia>>()
+    val mediaUploadErrors = mutableMapOf<UUID, String?>()
     private val usersById = mutableMapOf<UUID, User>()
 
     override suspend fun upsertMessage(message: Message) {
@@ -1355,25 +1828,59 @@ private class RecordingLocalDataSource(
         messagesById.values
             .filter { message -> message.sendStatus == status }
             .minWithOrNull(compareBy<Message> { message -> message.createdAt }.thenBy { message -> message.id })
-    override suspend fun upsertMedia(media: MessageMedia) = unused()
-    override suspend fun upsertMedia(items: List<MessageMedia>) = unused()
+    override suspend fun upsertMedia(media: MessageMedia) {
+        upsertMedia(listOf(media))
+    }
+
+    override suspend fun upsertMedia(items: List<MessageMedia>) {
+        upsertedMediaBatches += items
+        events += "local:upsertMedia"
+    }
+
     override suspend fun getMediaForMessage(messageId: UUID): List<MessageMedia> = unused()
     override suspend fun getMediaForMessages(messageIds: List<UUID>): List<MessageMedia> = unused()
     override fun observeMediaForMessage(messageId: UUID): Flow<List<MessageMedia>> = unused()
+    override suspend fun beginMediaUploadAttempt(mediaId: UUID) {
+        updateMedia(mediaId) { media -> media.copy(uploadStatus = MediaUploadStatus.UPLOADING) }
+        events += "local:media-UPLOADING"
+    }
     override suspend fun updateMediaUploadProgress(
         mediaId: UUID,
         status: MediaUploadStatus,
         progress: Int,
-    ) = unused()
-    override suspend fun markMediaUploaded(mediaId: UUID, storagePath: String) = unused()
+    ) {
+        updateMedia(mediaId) { media -> media.copy(uploadStatus = status) }
+        events += "local:media-progress"
+    }
+    override suspend fun markMediaUploaded(mediaId: UUID, storagePath: String) {
+        updateMedia(mediaId) { media ->
+            media.copy(
+                storagePath = storagePath,
+                uploadStatus = MediaUploadStatus.UPLOADED,
+            )
+        }
+        events += "local:media-UPLOADED"
+    }
     override suspend fun markMediaUploadFailed(
         mediaId: UUID,
-        attemptCount: Int,
         error: String?,
-    ) = unused()
+    ) {
+        mediaUploadErrors[mediaId] = error
+        updateMedia(mediaId) { media -> media.copy(uploadStatus = MediaUploadStatus.FAILED) }
+        events += "local:media-FAILED"
+    }
     override suspend fun getMediaByStatuses(statuses: List<MediaUploadStatus>): List<MessageMedia> =
         unused()
     override suspend fun deleteMediaForMessage(messageId: UUID) = unused()
+
+    private fun updateMedia(mediaId: UUID, transform: (MessageMedia) -> MessageMedia) {
+        val message = currentMessage ?: return
+        currentMessage = message.copy(
+            media = message.media.map { media ->
+                if (media.id == mediaId) transform(media) else media
+            },
+        )
+    }
 }
 
 private class RecordingRemoteDataSource(
@@ -1397,6 +1904,12 @@ private class RecordingRemoteDataSource(
     val completeMessagesById = mutableMapOf<UUID, Message>()
     val emittedMessageLookups = mutableListOf<UUID>()
     var getMessageFailure: Exception? = null
+    val uploadedMedia = mutableListOf<UploadedChatMedia>()
+    val createdMediaMessages = mutableListOf<CreatedMediaMessage>()
+    var uploadFailure: Exception? = null
+    var uploadFailureMediaId: UUID? = null
+    var createMediaFailure: Exception? = null
+    var cancelOnUploadMediaId: UUID? = null
     private val remoteMessageIds = MutableSharedFlow<UUID>(extraBufferCapacity = 16)
 
     suspend fun emitRemoteMessageId(messageId: UUID) {
@@ -1459,14 +1972,51 @@ private class RecordingRemoteDataSource(
         senderId: UUID,
         text: String?,
         media: List<MessageMedia>,
-    ): Message = unused()
+    ): Message {
+        events += "remote:createMedia"
+        createdMediaMessages += CreatedMediaMessage(
+            messageId = messageId,
+            senderId = senderId,
+            text = text,
+            media = media,
+        )
+        createMediaFailure?.let { throw it }
+        return Message(
+            id = messageId,
+            senderId = senderId,
+            textContent = text,
+            createdAt = createdAt,
+            updatedAt = updatedAt,
+            media = media,
+            sendStatus = MessageSendStatus.SENT,
+        )
+    }
+
     override suspend fun uploadChatMedia(
         messageId: UUID,
         mediaId: UUID,
         extension: String,
         bytes: ByteArray,
         mimeType: String,
-    ): String = unused()
+    ): String {
+        events += "remote:upload"
+        val storagePath = "$messageId/$mediaId.$extension"
+        uploadedMedia += UploadedChatMedia(
+            messageId = messageId,
+            mediaId = mediaId,
+            extension = extension,
+            bytes = bytes,
+            mimeType = mimeType,
+            storagePath = storagePath,
+        )
+        if (mediaId == cancelOnUploadMediaId) {
+            throw CancellationException("upload cancelled")
+        }
+        if (uploadFailureMediaId == mediaId || (uploadFailureMediaId == null && uploadFailure != null)) {
+            uploadFailure?.let { throw it }
+        }
+        return storagePath
+    }
     override suspend fun uploadProfileImage(
         userId: UUID,
         bytes: ByteArray,
@@ -1475,5 +2025,21 @@ private class RecordingRemoteDataSource(
     ): String = unused()
     override suspend fun deleteChatMediaObject(storagePath: String) = unused()
 }
+
+private data class UploadedChatMedia(
+    val messageId: UUID,
+    val mediaId: UUID,
+    val extension: String,
+    val bytes: ByteArray,
+    val mimeType: String,
+    val storagePath: String,
+)
+
+private data class CreatedMediaMessage(
+    val messageId: UUID,
+    val senderId: UUID,
+    val text: String?,
+    val media: List<MessageMedia>,
+)
 
 private fun unused(): Nothing = error("Not used by this test.")

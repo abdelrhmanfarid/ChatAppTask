@@ -9,6 +9,7 @@ import com.example.chatapptask.core.domain.model.PendingMedia
 import com.example.chatapptask.core.domain.repository.ChatRepository
 import com.example.chatapptask.data.chat.local.ChatLocalDataSource
 import com.example.chatapptask.data.chat.local.OutgoingMediaStore
+import com.example.chatapptask.data.chat.local.fileExtensionFor
 import com.example.chatapptask.data.chat.remote.ChatRemoteDataSource
 import com.example.chatapptask.data.chat.worker.MediaMessageScheduleReason
 import com.example.chatapptask.data.chat.worker.MediaMessageSendScheduler
@@ -16,9 +17,11 @@ import com.example.chatapptask.data.chat.worker.TextMessageSendScheduler
 import com.example.chatapptask.data.chat.worker.TextMessageScheduleReason
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.CancellationException
 import javax.inject.Inject
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -193,13 +196,106 @@ class DefaultChatRepository @Inject constructor(
     }
 
     /**
-     * Stage 3: load/validate the persisted media message and begin a send attempt.
-     * Upload and `create_media_message` are Stage 4; this must not mark the row SENT
-     * or call Supabase, and it must not throw a retryable error after a valid prepare.
+     * Uploads remaining attachments in position order, then creates the remote media message
+     * with the same UUIDs. Room stays SENDING until remote creation succeeds.
      */
-    internal suspend fun sendPersistedMediaMessage(messageId: UUID) {
-        requirePersistedMediaMessage(messageId)
+    internal suspend fun sendPersistedMediaMessage(
+        messageId: UUID,
+        onAttachmentProgress: suspend (current: Int, total: Int) -> Unit = { _, _ -> },
+    ) {
+        val message = requirePersistedMediaMessage(messageId)
         localDataSource.beginMessageSendAttempt(messageId)
+
+        try {
+            val uploaded = message.media.mapIndexed { index, media ->
+                coroutineContext.ensureActive()
+                onAttachmentProgress(index + 1, message.media.size)
+                ensureUploadedAttachment(media)
+            }
+            val remoteMessage = createOrReuseRemoteMediaMessage(
+                messageId = messageId,
+                senderId = message.senderId,
+                text = message.textContent,
+                media = uploaded,
+            )
+            localDataSource.reconcileSentMessage(
+                messageId = messageId,
+                createdAt = remoteMessage.createdAt,
+                updatedAt = remoteMessage.updatedAt,
+            )
+            runCatching { outgoingMediaStore.deleteCopiedMedia(messageId) }
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            localDataSource.markMessageSendFailed(
+                messageId = messageId,
+                lastError = exception.message ?: UNKNOWN_MEDIA_SEND_ERROR,
+            )
+            throw exception
+        }
+    }
+
+    private suspend fun ensureUploadedAttachment(media: MessageMedia): MessageMedia {
+        val existingPath = media.storagePath?.takeIf(String::isNotBlank)
+        if (media.uploadStatus == MediaUploadStatus.UPLOADED && existingPath != null) {
+            return media.copy(
+                storagePath = existingPath,
+                uploadStatus = MediaUploadStatus.UPLOADED,
+            )
+        }
+
+        val localUri = media.localUri?.takeIf(String::isNotBlank)
+            ?: throw PersistedMediaLocalFileMissingException(media.messageId, media.id)
+        if (!outgoingMediaStore.hasReadableCopy(localUri)) {
+            throw PersistedMediaLocalFileMissingException(media.messageId, media.id)
+        }
+
+        localDataSource.beginMediaUploadAttempt(media.id)
+        try {
+            coroutineContext.ensureActive()
+            val storagePath = remoteDataSource.uploadChatMedia(
+                messageId = media.messageId,
+                mediaId = media.id,
+                extension = fileExtensionFor(media.mimeType, localUri),
+                bytes = outgoingMediaStore.readCopyBytes(localUri),
+                mimeType = media.mimeType,
+            )
+            localDataSource.markMediaUploaded(media.id, storagePath)
+            return media.copy(
+                storagePath = storagePath,
+                uploadStatus = MediaUploadStatus.UPLOADED,
+            )
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            localDataSource.markMediaUploadFailed(
+                mediaId = media.id,
+                error = exception.message ?: UNKNOWN_MEDIA_UPLOAD_ERROR,
+            )
+            throw exception
+        }
+    }
+
+    private suspend fun createOrReuseRemoteMediaMessage(
+        messageId: UUID,
+        senderId: UUID,
+        text: String?,
+        media: List<MessageMedia>,
+    ): Message {
+        runCatching { remoteDataSource.getMessage(messageId) }.getOrNull()?.let { return it }
+        return try {
+            remoteDataSource.createMediaMessage(
+                messageId = messageId,
+                senderId = senderId,
+                text = text,
+                media = media,
+            )
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            runCatching { remoteDataSource.getMessage(messageId) }.getOrNull()
+                ?: throw exception
+        }
     }
 
     private suspend fun requirePersistedMediaMessage(messageId: UUID): Message {
@@ -292,9 +388,8 @@ class DefaultChatRepository @Inject constructor(
             return
         }
         persistSenders(listOf(sentMessage))
-        if (sentMessage.media.isNotEmpty()) {
-            localDataSource.upsertMedia(sentMessage.media)
-        }
+        // Keep Android-only media fields (localUri, upload attempts/progress/error).
+        // MessageMedia.toEntity() would reset them if remote DTOs were upserted here.
         localDataSource.reconcileSentMessage(
             messageId = sentMessage.id,
             createdAt = sentMessage.createdAt,
@@ -334,6 +429,8 @@ class DefaultChatRepository @Inject constructor(
         const val UNKNOWN_SEND_ERROR = "Remote text-message insert failed."
         const val UNKNOWN_SCHEDULING_ERROR = "Text-message scheduling failed."
         const val UNKNOWN_MEDIA_SCHEDULING_ERROR = "Media-message scheduling failed."
+        const val UNKNOWN_MEDIA_SEND_ERROR = "Remote media-message send failed."
+        const val UNKNOWN_MEDIA_UPLOAD_ERROR = "Media upload failed."
         const val CANCELLED_SEND_ERROR = "Send cancelled."
         const val MEDIA_COUNT_REQUIRED = "A media message requires at least one attachment."
         const val MEDIA_COUNT_LIMIT = "A media message can include at most 10 attachments."

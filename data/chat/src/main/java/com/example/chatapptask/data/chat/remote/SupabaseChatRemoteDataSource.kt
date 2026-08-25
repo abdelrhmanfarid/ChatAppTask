@@ -182,10 +182,13 @@ class SupabaseChatRemoteDataSource @Inject constructor(
     ): String {
         val normalizedExtension = normalizeExtension(extension)
         val storagePath = "$messageId/$mediaId.$normalizedExtension"
+        // Deterministic `{messageId}/{mediaId}.{ext}` retry: overwrite the same object if
+        // Storage succeeded but Room never recorded UPLOADED. Same pattern as profile avatars.
         supabaseClient.storage[CHAT_MEDIA_BUCKET].upload(
             path = storagePath,
             data = bytes,
         ) {
+            upsert = true
             contentType = ContentType.parse(mimeType)
         }
         return storagePath

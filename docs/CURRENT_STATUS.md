@@ -36,10 +36,10 @@ Branch: `feature/media-messaging`. Repository code is authoritative; check `git 
 - Failure retains the row, marks `FAILED`, stores the error, preserves the increment, and causes WorkManager retry for retryable exceptions.
 - `ChatApp` supplies `HiltWorkerFactory`; the manifest disables WorkManager's default initializer.
 
-### Local media persist (no upload yet)
+### Local media persist and upload
 
 - `DefaultChatRepository.sendMediaMessage` validates 1–10 items, copies each picker URI into `filesDir/outgoing-media/{messageId}/{mediaId}.{ext}` via `OutgoingMediaStore` / `FileOutgoingMediaStore`, upserts one optimistic Room `Message` (`SENDING`) plus `MessageMedia` rows (`PENDING`, durable `localUri`, no `storagePath`), then schedules unique work `send-media-message:<UUID>` (`KEEP`, connected network, exponential min backoff). Copy or persist failure deletes the message directory and Room row and does not schedule work. Scheduling failure keeps the row and marks it `FAILED`.
-- `SendMediaMessageWorker` loads that UUID from WorkManager input only, reconstructs the Room media message, validates 1–10 ordered attachments and readable durable files for items not yet `UPLOADED`, then `beginMessageSendAttempt`. Stage 3 does **not** upload to Storage, call `create_media_message`, or mark `SENT`; a successful prepare completes the worker (`Result.success()`) so it does not retry forever. Invalid/non-media/missing rows fail terminally. Foreground notification reuses channel `message_send_work` (indeterminate, Cancel only). `cancelOutgoingSend` also cancels media unique work so that Cancel can stop the worker.
+- `SendMediaMessageWorker` loads that UUID from WorkManager input only, reconstructs the Room media message, validates 1–10 ordered attachments and readable durable files for items not yet `UPLOADED`, then `beginMessageSendAttempt`. Remaining attachments are uploaded through `ChatRemoteDataSource.uploadChatMedia` in `position` order using the same message/media UUIDs and `{messageId}/{mediaId}.{ext}` Storage paths. Already `UPLOADED` rows with a persisted `storagePath` are skipped. After every required object is `UPLOADED`, `create_media_message` is invoked with that same message UUID. Success reconciles the optimistic Room row to `SENT` without inserting a duplicate. Storage upload uses `upsert = true` so a crash after Storage success but before Room `UPLOADED` can retry the same object. If `create_media_message` fails, attachment `UPLOADED` paths are kept and a later retry skips Storage. If the remote message already exists for that UUID (`getMessage`), remote creation is skipped and the local row is reconciled. Foreground notification reuses channel `message_send_work` and shows attachment-level `Uploading n of m` progress (Cancel only). `cancelOutgoingSend` also cancels media unique work. `CancellationException` is rethrown; already-`UPLOADED` attachments are kept and RPC is not called. Durable outgoing files are deleted best-effort only after Room `SENT`.
 
 ### Network and users
 
@@ -49,7 +49,7 @@ Branch: `feature/media-messaging`. Repository code is authoritative; check `git 
 - `DefaultUserRepository` is local-first for lookup, caches remote users, and upserts remote then Room.
 - Profile Setup saves username plus optional positive integer age. Optional profile photo uses the system Photo Picker, local preview, then Storage upload of `{userId}/avatar.{ext}` into bucket `profile-images` before user upsert. Keyboard uses Scaffold `safeDrawing` only (no extra `imePadding`).
 - `DefaultChatRepository.loadLatestMessages` / `loadOlderMessages` fetch existing remote pages (`created_at DESC, id DESC`; older uses `created_at < cursor` OR same timestamp and `id < cursor`), mark messages `SENT`, upsert missing senders then messages/media into Room, and leave existing Room rows untouched when a fetch fails. Duplicate UUIDs are upserted by primary key. `loadOlderMessages` takes the oldest Room `SENT` message as the remote cursor (not `SENDING`/`FAILED` locals), returns the remote page size so Chat can detect exhausted history, and returns `0` without a remote fetch when no `SENT` cursor exists. Chat UI still only observes Room.
-- `DefaultChatRepository.startRealtimeSync` subscribes to Supabase `messages` INSERT and UPDATE (not DELETE), resolves each event through `getMessage` plus grouped media, upserts missing senders, then writes into Room. New remote rows are upserted as `SENT`; an existing optimistic local row is reconciled to `SENT` with server timestamps without resetting send-attempt metadata. `stopRealtimeSync` cancels the in-flight collection. Subscription failures do not clear Room. Realtime is owned by `ChatViewModel` (`viewModelScope`); Compose does not subscribe to Supabase.
+- `DefaultChatRepository.startRealtimeSync` subscribes to Supabase `messages` INSERT and UPDATE (not DELETE), resolves each event through `getMessage` plus grouped media, upserts missing senders, then writes into Room. New remote rows are upserted as `SENT`; an existing optimistic local row is reconciled to `SENT` with server timestamps without resetting send-attempt metadata and without replacing local media rows (remote DTOs would clear `localUri` and upload attempt/progress). `stopRealtimeSync` cancels the in-flight collection. Subscription failures do not clear Room. Realtime is owned by `ChatViewModel` (`viewModelScope`); Compose does not subscribe to Supabase.
 
 ### Presentation
 
@@ -62,7 +62,7 @@ Branch: `feature/media-messaging`. Repository code is authoritative; check `git 
 
 ## Not Implemented
 
-- Media Storage upload / `create_media_message`, media retry UI, picker/permissions, upload UI, and media rendering (local persist + media WorkManager prepare/validate are implemented; upload is not).
+- Media picker, Chat media rendering, media retry UI, and upload UI (Storage upload + `create_media_message` + Room `SENT` reconciliation are implemented).
 - Incoming-message push / FCM, Supabase Auth, presence, typing indicators, and read receipts.
 
 ## Working Conventions

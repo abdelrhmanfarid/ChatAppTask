@@ -21,6 +21,8 @@ interface OutgoingMediaStore {
     fun deleteCopiedMedia(messageId: UUID)
 
     fun hasReadableCopy(localUri: String): Boolean
+
+    fun readCopyBytes(localUri: String): ByteArray
 }
 
 class FileOutgoingMediaStore @Inject constructor(
@@ -59,6 +61,15 @@ class FileOutgoingMediaStore @Inject constructor(
         val path = Uri.parse(localUri).path ?: return false
         val file = File(path)
         return file.isFile && file.canRead() && file.length() > 0L
+    }
+
+    override fun readCopyBytes(localUri: String): ByteArray {
+        val path = Uri.parse(localUri).path ?: error("Outgoing media path is missing.")
+        val file = File(path)
+        if (!file.isFile || !file.canRead() || file.length() <= 0L) {
+            error("Outgoing media copy is missing or unreadable.")
+        }
+        return file.readBytes()
     }
 
     private fun messageDirectory(messageId: UUID): File =

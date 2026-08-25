@@ -62,6 +62,8 @@ interface ChatLocalDataSource {
 
     fun observeMediaForMessage(messageId: UUID): Flow<List<MessageMedia>>
 
+    suspend fun beginMediaUploadAttempt(mediaId: UUID)
+
     suspend fun updateMediaUploadProgress(
         mediaId: UUID,
         status: MediaUploadStatus,
@@ -75,7 +77,6 @@ interface ChatLocalDataSource {
 
     suspend fun markMediaUploadFailed(
         mediaId: UUID,
-        attemptCount: Int,
         error: String?,
     )
 

@@ -45,7 +45,22 @@ class SendMediaMessageWorker @AssistedInject constructor(
         }
 
         return try {
-            chatRepository.sendPersistedMediaMessage(messageId)
+            chatRepository.sendPersistedMediaMessage(messageId) { current, total ->
+                try {
+                    setForeground(
+                        MessageSendWorkNotifications.mediaMessageForegroundInfo(
+                            applicationContext,
+                            messageId,
+                            current,
+                            total,
+                        ),
+                    )
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    // Sending continues if the progress notification cannot be updated.
+                }
+            }
             sendMediaMessageWorkerResult(error = null)
         } catch (error: CancellationException) {
             throw error
