@@ -10,7 +10,9 @@ import com.example.chatapptask.data.chat.repository.DefaultChatRepository
 import com.example.chatapptask.core.domain.repository.ChatRepository
 import com.example.chatapptask.core.domain.repository.UserRepository
 import com.example.chatapptask.data.chat.repository.DefaultUserRepository
+import com.example.chatapptask.data.chat.worker.MediaMessageSendScheduler
 import com.example.chatapptask.data.chat.worker.TextMessageSendScheduler
+import com.example.chatapptask.data.chat.worker.WorkManagerMediaMessageSendScheduler
 import com.example.chatapptask.data.chat.worker.WorkManagerTextMessageSendScheduler
 import dagger.Binds
 import dagger.Module
@@ -49,4 +51,9 @@ abstract class ChatDataSourceModule {
     abstract fun bindTextMessageSendScheduler(
         implementation: WorkManagerTextMessageSendScheduler,
     ): TextMessageSendScheduler
+
+    @Binds
+    abstract fun bindMediaMessageSendScheduler(
+        implementation: WorkManagerMediaMessageSendScheduler,
+    ): MediaMessageSendScheduler
 }

@@ -10,6 +10,8 @@ import com.example.chatapptask.core.domain.repository.ChatRepository
 import com.example.chatapptask.data.chat.local.ChatLocalDataSource
 import com.example.chatapptask.data.chat.local.OutgoingMediaStore
 import com.example.chatapptask.data.chat.remote.ChatRemoteDataSource
+import com.example.chatapptask.data.chat.worker.MediaMessageScheduleReason
+import com.example.chatapptask.data.chat.worker.MediaMessageSendScheduler
 import com.example.chatapptask.data.chat.worker.TextMessageSendScheduler
 import com.example.chatapptask.data.chat.worker.TextMessageScheduleReason
 import java.time.Instant
@@ -26,6 +28,7 @@ class DefaultChatRepository @Inject constructor(
     private val remoteDataSource: ChatRemoteDataSource,
     private val userIdentityStore: UserIdentityStore,
     private val textMessageSendScheduler: TextMessageSendScheduler,
+    private val mediaMessageSendScheduler: MediaMessageSendScheduler,
     private val outgoingMediaStore: OutgoingMediaStore,
 ) : ChatRepository {
     private val realtimeMutex = Mutex()
@@ -76,6 +79,7 @@ class DefaultChatRepository @Inject constructor(
 
     override suspend fun cancelOutgoingSend(messageId: UUID) {
         textMessageSendScheduler.cancel(messageId)
+        mediaMessageSendScheduler.cancel(messageId)
         val message = localDataSource.getMessageById(messageId) ?: return
         if (message.sendStatus == MessageSendStatus.SENDING) {
             localDataSource.markMessageSendFailed(
@@ -184,6 +188,61 @@ class DefaultChatRepository @Inject constructor(
             runCatching { localDataSource.deleteMessage(messageId) }
             throw exception
         }
+
+        schedulePersistedMediaMessage(messageId, MediaMessageScheduleReason.INITIAL)
+    }
+
+    /**
+     * Stage 3: load/validate the persisted media message and begin a send attempt.
+     * Upload and `create_media_message` are Stage 4; this must not mark the row SENT
+     * or call Supabase, and it must not throw a retryable error after a valid prepare.
+     */
+    internal suspend fun sendPersistedMediaMessage(messageId: UUID) {
+        requirePersistedMediaMessage(messageId)
+        localDataSource.beginMessageSendAttempt(messageId)
+    }
+
+    private suspend fun requirePersistedMediaMessage(messageId: UUID): Message {
+        val message = localDataSource.getMessageById(messageId)
+            ?: throw PersistedMediaMessageNotFoundException(messageId)
+        if (message.media.isEmpty()) {
+            throw PersistedMessageIsNotMediaException(messageId)
+        }
+        if (message.media.size > MAX_MEDIA_ITEMS) {
+            throw PersistedMediaMessageInvalidException(
+                "Media message $messageId has ${message.media.size} attachments.",
+            )
+        }
+        val ordered = message.media.sortedBy(MessageMedia::position)
+        ordered.forEachIndexed { index, media ->
+            if (media.position != index) {
+                throw PersistedMediaMessageInvalidException(
+                    "Media message $messageId has invalid attachment positions.",
+                )
+            }
+            if (media.uploadStatus == MediaUploadStatus.UPLOADED) return@forEachIndexed
+            val localUri = media.localUri?.takeIf(String::isNotBlank)
+                ?: throw PersistedMediaLocalFileMissingException(messageId, media.id)
+            if (!outgoingMediaStore.hasReadableCopy(localUri)) {
+                throw PersistedMediaLocalFileMissingException(messageId, media.id)
+            }
+        }
+        return message.copy(media = ordered)
+    }
+
+    private suspend fun schedulePersistedMediaMessage(
+        messageId: UUID,
+        reason: MediaMessageScheduleReason,
+    ) {
+        try {
+            mediaMessageSendScheduler.enqueue(messageId, reason)
+        } catch (exception: Exception) {
+            localDataSource.markMessageSendFailed(
+                messageId = messageId,
+                lastError = exception.message ?: UNKNOWN_MEDIA_SCHEDULING_ERROR,
+            )
+            throw exception
+        }
     }
 
     override suspend fun retryMediaItem(
@@ -274,6 +333,7 @@ class DefaultChatRepository @Inject constructor(
     private companion object {
         const val UNKNOWN_SEND_ERROR = "Remote text-message insert failed."
         const val UNKNOWN_SCHEDULING_ERROR = "Text-message scheduling failed."
+        const val UNKNOWN_MEDIA_SCHEDULING_ERROR = "Media-message scheduling failed."
         const val CANCELLED_SEND_ERROR = "Send cancelled."
         const val MEDIA_COUNT_REQUIRED = "A media message requires at least one attachment."
         const val MEDIA_COUNT_LIMIT = "A media message can include at most 10 attachments."
@@ -288,3 +348,21 @@ internal class PersistedTextMessageNotFoundException(messageId: UUID) :
 
 internal class PersistedMessageIsNotTextException(messageId: UUID) :
     PersistedTextMessageException("Message $messageId is not a text-only message.")
+
+internal sealed class PersistedMediaMessageException(message: String) : IllegalStateException(message)
+
+internal class PersistedMediaMessageNotFoundException(messageId: UUID) :
+    PersistedMediaMessageException("Media message $messageId does not exist locally.")
+
+internal class PersistedMessageIsNotMediaException(messageId: UUID) :
+    PersistedMediaMessageException("Message $messageId is not a media message.")
+
+internal class PersistedMediaMessageInvalidException(message: String) :
+    PersistedMediaMessageException(message)
+
+internal class PersistedMediaLocalFileMissingException(
+    messageId: UUID,
+    mediaId: UUID,
+) : PersistedMediaMessageException(
+    "Media message $messageId is missing a durable local file for $mediaId.",
+)

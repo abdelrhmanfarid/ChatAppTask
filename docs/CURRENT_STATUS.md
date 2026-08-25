@@ -38,8 +38,8 @@ Branch: `feature/media-messaging`. Repository code is authoritative; check `git 
 
 ### Local media persist (no upload yet)
 
-- `DefaultChatRepository.sendMediaMessage` validates 1–10 items, copies each picker URI into `filesDir/outgoing-media/{messageId}/{mediaId}.{ext}` via `OutgoingMediaStore` / `FileOutgoingMediaStore`, then upserts one optimistic Room `Message` (`SENDING`) plus `MessageMedia` rows (`PENDING`, durable `localUri`, no `storagePath`). WorkManager is not scheduled.
-- Copy or persist failure deletes the message directory and the Room message row (media cascades). Text send, retry, cancel, Realtime, and pagination are unchanged.
+- `DefaultChatRepository.sendMediaMessage` validates 1–10 items, copies each picker URI into `filesDir/outgoing-media/{messageId}/{mediaId}.{ext}` via `OutgoingMediaStore` / `FileOutgoingMediaStore`, upserts one optimistic Room `Message` (`SENDING`) plus `MessageMedia` rows (`PENDING`, durable `localUri`, no `storagePath`), then schedules unique work `send-media-message:<UUID>` (`KEEP`, connected network, exponential min backoff). Copy or persist failure deletes the message directory and Room row and does not schedule work. Scheduling failure keeps the row and marks it `FAILED`.
+- `SendMediaMessageWorker` loads that UUID from WorkManager input only, reconstructs the Room media message, validates 1–10 ordered attachments and readable durable files for items not yet `UPLOADED`, then `beginMessageSendAttempt`. Stage 3 does **not** upload to Storage, call `create_media_message`, or mark `SENT`; a successful prepare completes the worker (`Result.success()`) so it does not retry forever. Invalid/non-media/missing rows fail terminally. Foreground notification reuses channel `message_send_work` (indeterminate, Cancel only). `cancelOutgoingSend` also cancels media unique work so that Cancel can stop the worker.
 
 ### Network and users
 
@@ -62,7 +62,7 @@ Branch: `feature/media-messaging`. Repository code is authoritative; check `git 
 
 ## Not Implemented
 
-- Media WorkManager/upload/retry/cancel, picker/permissions, upload UI, and media rendering (local persist of outgoing media messages is implemented; the send-work notification channel/progress helper is ready to reuse).
+- Media Storage upload / `create_media_message`, media retry UI, picker/permissions, upload UI, and media rendering (local persist + media WorkManager prepare/validate are implemented; upload is not).
 - Incoming-message push / FCM, Supabase Auth, presence, typing indicators, and read receipts.
 
 ## Working Conventions

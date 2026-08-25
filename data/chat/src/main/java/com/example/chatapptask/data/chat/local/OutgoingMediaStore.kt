@@ -19,6 +19,8 @@ interface OutgoingMediaStore {
     ): String
 
     fun deleteCopiedMedia(messageId: UUID)
+
+    fun hasReadableCopy(localUri: String): Boolean
 }
 
 class FileOutgoingMediaStore @Inject constructor(
@@ -51,6 +53,12 @@ class FileOutgoingMediaStore @Inject constructor(
 
     override fun deleteCopiedMedia(messageId: UUID) {
         messageDirectory(messageId).deleteRecursively()
+    }
+
+    override fun hasReadableCopy(localUri: String): Boolean {
+        val path = Uri.parse(localUri).path ?: return false
+        val file = File(path)
+        return file.isFile && file.canRead() && file.length() > 0L
     }
 
     private fun messageDirectory(messageId: UUID): File =

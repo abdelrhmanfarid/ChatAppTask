@@ -58,6 +58,31 @@ object MessageSendWorkNotifications {
         }
     }
 
+    internal fun mediaMessageForegroundInfo(context: Context, messageId: UUID): ForegroundInfo {
+        ensureChannel(context)
+        val workKey = mediaMessageUniqueWorkName(messageId)
+        val notification = build(
+            context = context,
+            workKey = workKey,
+            messageId = messageId,
+            title = context.getString(R.string.notification_sending_message),
+            text = context.getString(R.string.notification_message_being_sent),
+            progress = MessageSendWorkProgress.Indeterminate,
+            showRetry = false,
+            showCancel = true,
+        )
+        val id = notificationId(workKey)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ForegroundInfo(
+                id,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+            )
+        } else {
+            ForegroundInfo(id, notification)
+        }
+    }
+
     /**
      * Builds an ongoing send/upload notification.
      *

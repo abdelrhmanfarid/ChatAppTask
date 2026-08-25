@@ -11,6 +11,8 @@ import com.example.chatapptask.core.domain.model.User
 import com.example.chatapptask.data.chat.local.ChatLocalDataSource
 import com.example.chatapptask.data.chat.local.OutgoingMediaStore
 import com.example.chatapptask.data.chat.remote.ChatRemoteDataSource
+import com.example.chatapptask.data.chat.worker.MediaMessageScheduleReason
+import com.example.chatapptask.data.chat.worker.MediaMessageSendScheduler
 import com.example.chatapptask.data.chat.worker.TextMessageSendScheduler
 import com.example.chatapptask.data.chat.worker.TextMessageScheduleReason
 import java.time.Instant
@@ -178,7 +180,8 @@ class DefaultChatRepositoryTest {
         val remote = RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt)
         val scheduler = RecordingTextMessageSendScheduler(events)
         val store = RecordingOutgoingMediaStore(events)
-        val repository = createRepository(local, remote, scheduler, store)
+        val mediaScheduler = RecordingMediaMessageSendScheduler(events)
+        val repository = createRepository(local, remote, scheduler, store, mediaScheduler)
         val pending = pendingMedia("content://picker/one", mimeType = "image/jpeg")
 
         repository.sendMediaMessage(listOf(pending), text = "caption")
@@ -201,19 +204,25 @@ class DefaultChatRepositoryTest {
         assertEquals(message.id, store.copied.single().messageId)
         assertEquals(media.id, store.copied.single().mediaId)
         assertTrue(scheduler.messages.isEmpty())
+        assertEquals(
+            listOf(ScheduledMediaMessage(message.id, MediaMessageScheduleReason.INITIAL)),
+            mediaScheduler.messages,
+        )
         assertTrue(remote.messageIds.isEmpty())
-        assertEquals(listOf("store:copy", "local:SENDING"), events)
+        assertEquals(listOf("store:copy", "local:SENDING", "media-scheduler:enqueue"), events)
     }
 
     @Test
     fun sendMediaMessage_multipleItems_preserveOrderAndUniqueMediaIds() = runBlocking {
         val store = RecordingOutgoingMediaStore(mutableListOf())
+        val mediaScheduler = RecordingMediaMessageSendScheduler(mutableListOf())
         val local = RecordingLocalDataSource(mutableListOf())
         val repository = createRepository(
             local,
             RecordingRemoteDataSource(mutableListOf(), serverCreatedAt, serverUpdatedAt),
             RecordingTextMessageSendScheduler(mutableListOf()),
             store,
+            mediaScheduler,
         )
         val pending = listOf(
             pendingMedia("content://picker/a", mimeType = "image/png"),
@@ -237,17 +246,23 @@ class DefaultChatRepositoryTest {
         )
         assertTrue(message.media.all { item -> item.uploadStatus == MediaUploadStatus.PENDING })
         assertTrue(message.media.all { item -> item.storagePath == null })
+        assertEquals(
+            listOf(ScheduledMediaMessage(message.id, MediaMessageScheduleReason.INITIAL)),
+            mediaScheduler.messages,
+        )
     }
 
     @Test
     fun sendMediaMessage_tenItems_accepted() = runBlocking {
         val local = RecordingLocalDataSource(mutableListOf())
         val store = RecordingOutgoingMediaStore(mutableListOf())
+        val mediaScheduler = RecordingMediaMessageSendScheduler(mutableListOf())
         val repository = createRepository(
             local,
             RecordingRemoteDataSource(mutableListOf(), serverCreatedAt, serverUpdatedAt),
             RecordingTextMessageSendScheduler(mutableListOf()),
             store,
+            mediaScheduler,
         )
 
         repository.sendMediaMessage(
@@ -259,6 +274,8 @@ class DefaultChatRepositoryTest {
         assertEquals(10, store.copied.size)
         assertEquals((0..9).toList(), message.media.map(MessageMedia::position))
         assertEquals(10, message.media.map(MessageMedia::id).distinct().size)
+        assertEquals(1, mediaScheduler.messages.size)
+        assertEquals(message.id, mediaScheduler.messages.single().messageId)
     }
 
     @Test
@@ -266,11 +283,13 @@ class DefaultChatRepositoryTest {
         val events = mutableListOf<String>()
         val local = RecordingLocalDataSource(events)
         val store = RecordingOutgoingMediaStore(events)
+        val mediaScheduler = RecordingMediaMessageSendScheduler(events)
         val repository = createRepository(
             local,
             RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt),
             RecordingTextMessageSendScheduler(events),
             store,
+            mediaScheduler,
         )
         var thrown: Throwable? = null
 
@@ -285,6 +304,7 @@ class DefaultChatRepositoryTest {
         assertTrue(thrown is IllegalArgumentException)
         assertEquals(0, local.upsertCount)
         assertTrue(store.copied.isEmpty())
+        assertTrue(mediaScheduler.messages.isEmpty())
         assertTrue(events.isEmpty())
     }
 
@@ -292,11 +312,13 @@ class DefaultChatRepositoryTest {
     fun sendMediaMessage_emptyList_rejectedWithoutCopyOrPersist() = runBlocking {
         val local = RecordingLocalDataSource(mutableListOf())
         val store = RecordingOutgoingMediaStore(mutableListOf())
+        val mediaScheduler = RecordingMediaMessageSendScheduler(mutableListOf())
         val repository = createRepository(
             local,
             RecordingRemoteDataSource(mutableListOf(), serverCreatedAt, serverUpdatedAt),
             RecordingTextMessageSendScheduler(mutableListOf()),
             store,
+            mediaScheduler,
         )
         var thrown: Throwable? = null
 
@@ -309,6 +331,7 @@ class DefaultChatRepositoryTest {
         assertTrue(thrown is IllegalArgumentException)
         assertEquals(0, local.upsertCount)
         assertTrue(store.copied.isEmpty())
+        assertTrue(mediaScheduler.messages.isEmpty())
     }
 
     @Test
@@ -316,11 +339,13 @@ class DefaultChatRepositoryTest {
         val events = mutableListOf<String>()
         val local = RecordingLocalDataSource(events)
         val store = RecordingOutgoingMediaStore(events, failOnCopyIndex = 1)
+        val mediaScheduler = RecordingMediaMessageSendScheduler(events)
         val repository = createRepository(
             local,
             RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt),
             RecordingTextMessageSendScheduler(events),
             store,
+            mediaScheduler,
         )
         var thrown: Throwable? = null
 
@@ -340,6 +365,7 @@ class DefaultChatRepositoryTest {
         assertTrue(store.copied.isEmpty())
         assertEquals(1, store.deletedMessageIds.size)
         assertEquals(listOf(store.deletedMessageIds.single()), local.deletedMessageIds)
+        assertTrue(mediaScheduler.messages.isEmpty())
         assertEquals(listOf("store:copy", "store:copy-fail", "store:delete", "local:delete"), events)
     }
 
@@ -349,11 +375,13 @@ class DefaultChatRepositoryTest {
         val failure = IllegalStateException("room unavailable")
         val local = RecordingLocalDataSource(events, upsertFailure = failure)
         val store = RecordingOutgoingMediaStore(events)
+        val mediaScheduler = RecordingMediaMessageSendScheduler(events)
         val repository = createRepository(
             local,
             RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt),
             RecordingTextMessageSendScheduler(events),
             store,
+            mediaScheduler,
         )
         var thrown: Throwable? = null
 
@@ -368,7 +396,181 @@ class DefaultChatRepositoryTest {
         assertEquals(null, local.persistedMessage)
         assertEquals(store.deletedMessageIds, local.deletedMessageIds)
         assertTrue(store.copied.isEmpty())
+        assertTrue(mediaScheduler.messages.isEmpty())
         assertEquals(listOf("store:copy", "local:SENDING", "store:delete", "local:delete"), events)
+    }
+
+    @Test
+    fun sendMediaMessage_schedulingFailure_keepsMessageAndMarksFailed() = runBlocking {
+        val events = mutableListOf<String>()
+        val failure = IllegalStateException("media scheduler unavailable")
+        val local = RecordingLocalDataSource(events)
+        val store = RecordingOutgoingMediaStore(events)
+        val mediaScheduler = RecordingMediaMessageSendScheduler(events, failure)
+        val repository = createRepository(
+            local,
+            RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt),
+            RecordingTextMessageSendScheduler(events),
+            store,
+            mediaScheduler,
+        )
+        var thrown: Throwable? = null
+
+        try {
+            repository.sendMediaMessage(listOf(pendingMedia("content://picker/a")))
+        } catch (exception: Throwable) {
+            thrown = exception
+        }
+
+        val message = requireNotNull(local.currentMessage)
+        assertSame(failure, thrown)
+        assertEquals(1, local.upsertCount)
+        assertEquals(MessageSendStatus.FAILED, message.sendStatus)
+        assertEquals("media scheduler unavailable", local.stateUpdates.single().lastError)
+        assertEquals(
+            listOf(ScheduledMediaMessage(requireNotNull(local.persistedMessage).id, MediaMessageScheduleReason.INITIAL)),
+            mediaScheduler.messages,
+        )
+        assertEquals(
+            listOf("store:copy", "local:SENDING", "media-scheduler:enqueue", "local:FAILED"),
+            events,
+        )
+    }
+
+    @Test
+    fun sendPersistedMediaMessage_validatesAndBeginsAttempt_withoutRemoteOrSent() = runBlocking {
+        val events = mutableListOf<String>()
+        val messageId = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+        val mediaId = UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+        val local = RecordingLocalDataSource(events).apply {
+            seedMessage(
+                persistedMediaMessage(messageId, listOf(localMedia(messageId, mediaId, 0))),
+                attemptCount = 0,
+            )
+        }
+        val remote = RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt)
+        val repository = createRepository(
+            local,
+            remote,
+            RecordingTextMessageSendScheduler(events),
+        )
+
+        repository.sendPersistedMediaMessage(messageId)
+
+        val message = requireNotNull(local.currentMessage)
+        assertEquals(1, local.sendAttemptCount)
+        assertEquals(MessageSendStatus.SENDING, message.sendStatus)
+        assertTrue(remote.messageIds.isEmpty())
+        assertEquals(listOf("local:SENDING"), events)
+    }
+
+    @Test
+    fun sendPersistedMediaMessage_textOnlyMessage_failsWithoutAttempt() = runBlocking {
+        val messageId = UUID.fromString("cccccccc-cccc-cccc-cccc-cccccccccccc")
+        val local = RecordingLocalDataSource(mutableListOf()).apply {
+            seedMessage(persistedTextMessage(messageId, MessageSendStatus.SENDING), attemptCount = 0)
+        }
+        val repository = createRepository(
+            local,
+            RecordingRemoteDataSource(mutableListOf(), serverCreatedAt, serverUpdatedAt),
+            RecordingTextMessageSendScheduler(mutableListOf()),
+        )
+        var thrown: Throwable? = null
+
+        try {
+            repository.sendPersistedMediaMessage(messageId)
+        } catch (exception: Throwable) {
+            thrown = exception
+        }
+
+        assertTrue(thrown is PersistedMessageIsNotMediaException)
+        assertEquals(0, local.sendAttemptCount)
+    }
+
+    @Test
+    fun sendPersistedMediaMessage_missingMessage_failsDeterministically() = runBlocking {
+        val messageId = UUID.fromString("dddddddd-dddd-dddd-dddd-dddddddddddd")
+        val local = RecordingLocalDataSource(mutableListOf())
+        val repository = createRepository(
+            local,
+            RecordingRemoteDataSource(mutableListOf(), serverCreatedAt, serverUpdatedAt),
+            RecordingTextMessageSendScheduler(mutableListOf()),
+        )
+        var thrown: Throwable? = null
+
+        try {
+            repository.sendPersistedMediaMessage(messageId)
+        } catch (exception: Throwable) {
+            thrown = exception
+        }
+
+        assertTrue(thrown is PersistedMediaMessageNotFoundException)
+        assertEquals(0, local.sendAttemptCount)
+    }
+
+    @Test
+    fun sendPersistedMediaMessage_invalidAttachmentCount_failsWithoutAttempt() = runBlocking {
+        val messageId = UUID.fromString("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+        val media = List(11) { index ->
+            localMedia(
+                messageId,
+                UUID.fromString("00000000-0000-0000-0000-0000000000${index.toString().padStart(2, '0')}"),
+                index,
+            )
+        }
+        val local = RecordingLocalDataSource(mutableListOf()).apply {
+            seedMessage(persistedMediaMessage(messageId, media), attemptCount = 0)
+        }
+        val repository = createRepository(
+            local,
+            RecordingRemoteDataSource(mutableListOf(), serverCreatedAt, serverUpdatedAt),
+            RecordingTextMessageSendScheduler(mutableListOf()),
+        )
+        var thrown: Throwable? = null
+
+        try {
+            repository.sendPersistedMediaMessage(messageId)
+        } catch (exception: Throwable) {
+            thrown = exception
+        }
+
+        assertTrue(thrown is PersistedMediaMessageInvalidException)
+        assertEquals(0, local.sendAttemptCount)
+    }
+
+    @Test
+    fun sendPersistedMediaMessage_missingDurableLocalFile_failsWithoutAttempt() = runBlocking {
+        val messageId = UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff")
+        val mediaId = UUID.fromString("11111111-1111-1111-1111-111111111111")
+        val localUri = "file:///outgoing-media/$messageId/$mediaId"
+        val store = RecordingOutgoingMediaStore(mutableListOf()).apply {
+            unreadableUris += localUri
+        }
+        val local = RecordingLocalDataSource(mutableListOf()).apply {
+            seedMessage(
+                persistedMediaMessage(
+                    messageId,
+                    listOf(localMedia(messageId, mediaId, 0, localUri = localUri)),
+                ),
+                attemptCount = 0,
+            )
+        }
+        val repository = createRepository(
+            local,
+            RecordingRemoteDataSource(mutableListOf(), serverCreatedAt, serverUpdatedAt),
+            RecordingTextMessageSendScheduler(mutableListOf()),
+            store,
+        )
+        var thrown: Throwable? = null
+
+        try {
+            repository.sendPersistedMediaMessage(messageId)
+        } catch (exception: Throwable) {
+            thrown = exception
+        }
+
+        assertTrue(thrown is PersistedMediaLocalFileMissingException)
+        assertEquals(0, local.sendAttemptCount)
     }
 
     @Test
@@ -828,6 +1030,8 @@ class DefaultChatRepositoryTest {
         remoteDataSource: ChatRemoteDataSource,
         scheduler: TextMessageSendScheduler,
         outgoingMediaStore: OutgoingMediaStore = RecordingOutgoingMediaStore(mutableListOf()),
+        mediaMessageSendScheduler: MediaMessageSendScheduler =
+            RecordingMediaMessageSendScheduler(mutableListOf()),
     ): DefaultChatRepository =
         DefaultChatRepository(
             localDataSource = localDataSource,
@@ -836,6 +1040,7 @@ class DefaultChatRepositoryTest {
                 override suspend fun getOrCreateUserId(): UUID = senderId
             },
             textMessageSendScheduler = scheduler,
+            mediaMessageSendScheduler = mediaMessageSendScheduler,
             outgoingMediaStore = outgoingMediaStore,
         )
 
@@ -851,6 +1056,42 @@ class DefaultChatRepositoryTest {
             sizeBytes = 12L,
             width = 100,
             height = 80,
+        )
+
+    private fun persistedMediaMessage(
+        messageId: UUID,
+        media: List<MessageMedia>,
+        status: MessageSendStatus = MessageSendStatus.SENDING,
+    ): Message =
+        Message(
+            id = messageId,
+            senderId = senderId,
+            textContent = null,
+            createdAt = Instant.parse("2026-08-23T12:00:00Z"),
+            updatedAt = Instant.parse("2026-08-23T12:00:00Z"),
+            media = media,
+            sendStatus = status,
+        )
+
+    private fun localMedia(
+        messageId: UUID,
+        mediaId: UUID,
+        position: Int,
+        localUri: String = "file:///outgoing-media/$messageId/$mediaId",
+        uploadStatus: MediaUploadStatus = MediaUploadStatus.PENDING,
+    ): MessageMedia =
+        MessageMedia(
+            id = mediaId,
+            messageId = messageId,
+            storagePath = null,
+            mediaType = MediaType.IMAGE,
+            mimeType = "image/jpeg",
+            position = position,
+            sizeBytes = 12L,
+            width = 100,
+            height = 80,
+            localUri = localUri,
+            uploadStatus = uploadStatus,
         )
 
     private fun persistedTextMessage(
@@ -942,6 +1183,30 @@ private data class ScheduledMessage(
     val reason: TextMessageScheduleReason,
 )
 
+private data class ScheduledMediaMessage(
+    val messageId: UUID,
+    val reason: MediaMessageScheduleReason,
+)
+
+private class RecordingMediaMessageSendScheduler(
+    private val events: MutableList<String>,
+    private val failure: Exception? = null,
+) : MediaMessageSendScheduler {
+    val messages = mutableListOf<ScheduledMediaMessage>()
+    val cancelled = mutableListOf<UUID>()
+
+    override suspend fun enqueue(messageId: UUID, reason: MediaMessageScheduleReason) {
+        messages += ScheduledMediaMessage(messageId, reason)
+        events += "media-scheduler:enqueue"
+        failure?.let { throw it }
+    }
+
+    override suspend fun cancel(messageId: UUID) {
+        cancelled += messageId
+        events += "media-scheduler:cancel"
+    }
+}
+
 private data class CopiedOutgoingMedia(
     val sourceUri: String,
     val messageId: UUID,
@@ -955,6 +1220,7 @@ private class RecordingOutgoingMediaStore(
 ) : OutgoingMediaStore {
     val copied = mutableListOf<CopiedOutgoingMedia>()
     val deletedMessageIds = mutableListOf<UUID>()
+    val unreadableUris = mutableSetOf<String>()
 
     override fun copyIncoming(
         sourceUri: String,
@@ -982,6 +1248,9 @@ private class RecordingOutgoingMediaStore(
         deletedMessageIds += messageId
         events += "store:delete"
     }
+
+    override fun hasReadableCopy(localUri: String): Boolean =
+        localUri.isNotBlank() && localUri !in unreadableUris
 }
 
 private class RecordingLocalDataSource(
