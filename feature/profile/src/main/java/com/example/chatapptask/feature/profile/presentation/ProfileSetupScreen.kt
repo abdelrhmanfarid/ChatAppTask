@@ -59,6 +59,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.chatapptask.core.ui.clearFocusOnTap
 import com.example.chatapptask.feature.profile.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -114,7 +115,9 @@ fun ProfileSetupScreen(
     val previewBitmap = rememberProfilePreviewBitmap(state.selectedImageUri)
 
     Scaffold(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier
+            .fillMaxSize()
+            .clearFocusOnTap(),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         contentWindowInsets = WindowInsets.safeDrawing,
     ) { contentPadding ->

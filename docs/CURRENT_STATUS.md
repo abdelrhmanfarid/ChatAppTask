@@ -6,6 +6,7 @@ Branch: `feature/text-messaging`. Repository code is authoritative; check `git s
 
 - `:app`: application entry point, Material 3 theme, Android/Compose splash, Hilt/WorkManager setup.
 - `:core:common`: `UserIdentityStore`; `AndroidIdUserIdentityStore` derives a stable UUID from `Settings.Secure.ANDROID_ID` (no identity DataStore).
+- `:core:ui`: shared Compose UI utilities, including `clearFocusOnTap()`.
 - `:core:domain`: pure Kotlin models and `ChatRepository`/`UserRepository` contracts.
 - `:core:database`: Room database, entities, DAOs, converters, and mappings.
 - `:core:network`: Supabase client, DTOs, mappings, and debug-only Ktor logging.
