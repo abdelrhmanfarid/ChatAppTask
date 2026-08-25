@@ -12,4 +12,10 @@ interface UserRepository {
     fun observeUser(userId: UUID): Flow<User?>
 
     suspend fun upsertUser(user: User)
+
+    suspend fun uploadProfileImage(
+        bytes: ByteArray,
+        mimeType: String,
+        fileExtension: String,
+    ): String
 }

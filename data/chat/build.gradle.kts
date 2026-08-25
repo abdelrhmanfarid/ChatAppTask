@@ -27,6 +27,7 @@ dependencies {
 
     implementation(platform(libs.supabase.bom))
     implementation(libs.supabase.postgrest)
+    implementation(libs.supabase.realtime)
     implementation(libs.supabase.storage)
 
     implementation(libs.kotlinx.coroutines.core)
@@ -39,4 +40,6 @@ dependencies {
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
     ksp(libs.kotlin.metadata.jvm)
+
+    testImplementation(libs.junit)
 }

@@ -1,0 +1,25 @@
+---
+description: Core Chat App Task project rules
+alwaysApply: true
+---
+
+# Project Rules
+
+Read `docs/PROJECT_CONTEXT.md` and `docs/CURRENT_STATUS.md` before making architectural or product assumptions.
+
+Key invariants:
+
+- Kotlin + Jetpack Compose + Material 3.
+- Clean Architecture + MVI/UDF.
+- Room is the Android source of truth.
+- WorkManager handles reliable sends.
+- Supabase is backend.
+- No Supabase Auth.
+- Local UUID is identity, not authentication.
+- Never introduce login/signup/OTP/password/email-auth UI.
+- Text messaging comes first.
+- Message states: SENDING, SENT, FAILED.
+- Failed messages are retryable.
+- Do not invent product fields/features that are not in the model.
+
+For exact implementation details, inspect only files relevant to the task. Do not rescan the whole repository unless necessary.

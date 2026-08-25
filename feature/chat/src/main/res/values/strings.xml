@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_title">Chat App</string>
+    <string name="chat_empty_title">No messages yet</string>
+    <string name="chat_empty_body">Start the conversation with a message.</string>
+    <string name="chat_composer_placeholder">Message</string>
+    <string name="chat_send">Send</string>
+    <string name="chat_attachment">Add attachment</string>
+    <string name="chat_attachment_unavailable">Attachments coming soon</string>
+    <string name="chat_sending">Sending…</string>
+    <string name="chat_sent">Sent</string>
+    <string name="chat_failed">Not sent</string>
+    <string name="chat_retry">Retry</string>
+    <string name="chat_loading_older">Loading older messages</string>
+</resources>

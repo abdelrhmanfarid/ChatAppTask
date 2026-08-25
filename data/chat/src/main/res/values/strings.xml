@@ -1,0 +1,8 @@
+<resources>
+    <string name="notification_channel_message_send_name">Message sending</string>
+    <string name="notification_channel_message_send_description">Shows progress while this device sends or uploads a message</string>
+    <string name="notification_sending_message">Sending message</string>
+    <string name="notification_message_being_sent">Message is being sent</string>
+    <string name="notification_action_retry">Retry</string>
+    <string name="notification_action_cancel">Cancel</string>
+</resources>

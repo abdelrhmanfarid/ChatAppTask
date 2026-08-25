@@ -90,17 +90,31 @@ class RoomChatLocalDataSource @Inject constructor(
             ),
         )
 
-    override suspend fun updateMessageSendState(
-        messageId: UUID,
-        status: MessageSendStatus,
-        attemptCount: Int,
-        lastError: String?,
-    ) {
-        messageDao.updateSendState(
+    override suspend fun beginMessageSendAttempt(messageId: UUID) {
+        messageDao.beginSendAttempt(
             messageId = messageId,
-            status = status,
-            attemptCount = attemptCount,
+            status = MessageSendStatus.SENDING,
+        )
+    }
+
+    override suspend fun markMessageSendFailed(messageId: UUID, lastError: String?) {
+        messageDao.markSendFailed(
+            messageId = messageId,
+            status = MessageSendStatus.FAILED,
             lastError = lastError,
+        )
+    }
+
+    override suspend fun reconcileSentMessage(
+        messageId: UUID,
+        createdAt: Instant,
+        updatedAt: Instant,
+    ) {
+        messageDao.updateAfterSendSuccess(
+            messageId = messageId,
+            createdAt = createdAt,
+            updatedAt = updatedAt,
+            status = MessageSendStatus.SENT,
         )
     }
 
@@ -108,6 +122,12 @@ class RoomChatLocalDataSource @Inject constructor(
         statuses: List<MessageSendStatus>,
     ): List<Message> =
         mapMessagesWithMedia(messageDao.getMessagesBySendStatuses(statuses))
+
+    override suspend fun getOldestMessageBySendStatus(status: MessageSendStatus): Message? {
+        val message = messageDao.getOldestMessageBySendStatus(status) ?: return null
+        val media = messageMediaDao.getMediaForMessage(message.id)
+        return message.toDomain(media)
+    }
 
     override suspend fun upsertMedia(media: MessageMedia) {
         messageMediaDao.upsertMedia(media.toEntity())
