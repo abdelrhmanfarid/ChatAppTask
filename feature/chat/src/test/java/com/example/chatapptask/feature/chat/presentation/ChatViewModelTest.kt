@@ -1,5 +1,6 @@
 package com.example.chatapptask.feature.chat.presentation
 
+import com.example.chatapptask.core.domain.model.MediaType
 import com.example.chatapptask.core.domain.model.Message
 import com.example.chatapptask.core.domain.model.MessageSendStatus
 import com.example.chatapptask.core.domain.model.PendingMedia
@@ -62,13 +63,159 @@ class ChatViewModelTest {
         advanceUntilIdle()
 
         assertEquals(listOf("Hello"), repository.sentTexts)
+        assertTrue(repository.sentMedia.isEmpty())
         assertEquals("", viewModel.uiState.value.composerText)
         assertFalse(viewModel.uiState.value.isSendRequestInProgress)
         assertTrue(viewModel.uiState.value.messages.isEmpty())
     }
 
     @Test
-    fun blankText_doesNotSend() = runTest(dispatcher) {
+    fun mediaSelection_isStoredInOrder() = runTest(dispatcher) {
+        val viewModel = ChatViewModel(FakeChatRepository(), FakeUserRepository())
+        val first = attachment("content://media/1", MediaType.IMAGE, "image/jpeg")
+        val second = attachment("content://media/2", MediaType.VIDEO, "video/mp4")
+
+        viewModel.onAction(ChatAction.MediaSelected(listOf(first, second)))
+        advanceUntilIdle()
+
+        assertEquals(listOf(first, second), viewModel.uiState.value.selectedAttachments)
+    }
+
+    @Test
+    fun mediaSelection_enforcesMaximumOfTen() = runTest(dispatcher) {
+        val viewModel = ChatViewModel(FakeChatRepository(), FakeUserRepository())
+        val initial = (1..8).map { index ->
+            attachment("content://media/$index", MediaType.IMAGE, "image/jpeg")
+        }
+        val extra = (9..12).map { index ->
+            attachment("content://media/$index", MediaType.IMAGE, "image/jpeg")
+        }
+
+        viewModel.onAction(ChatAction.MediaSelected(initial))
+        viewModel.onAction(ChatAction.MediaSelected(extra))
+        advanceUntilIdle()
+
+        assertEquals(10, viewModel.uiState.value.selectedAttachments.size)
+        assertEquals(
+            (1..10).map { "content://media/$it" },
+            viewModel.uiState.value.selectedAttachments.map { it.uri },
+        )
+    }
+
+    @Test
+    fun removeSelectedMedia_removesIndividualItem() = runTest(dispatcher) {
+        val viewModel = ChatViewModel(FakeChatRepository(), FakeUserRepository())
+        val first = attachment("content://media/1", MediaType.IMAGE, "image/jpeg")
+        val second = attachment("content://media/2", MediaType.VIDEO, "video/mp4")
+        val third = attachment("content://media/3", MediaType.IMAGE, "image/png")
+
+        viewModel.onAction(ChatAction.MediaSelected(listOf(first, second, third)))
+        viewModel.onAction(ChatAction.RemoveSelectedMedia(second.uri))
+        advanceUntilIdle()
+
+        assertEquals(listOf(first, third), viewModel.uiState.value.selectedAttachments)
+    }
+
+    @Test
+    fun mediaOnlySend_invokesMediaPathAndClearsSelection() = runTest(dispatcher) {
+        val repository = FakeChatRepository()
+        val viewModel = ChatViewModel(repository, FakeUserRepository())
+        val media = listOf(
+            attachment("content://media/1", MediaType.IMAGE, "image/jpeg"),
+            attachment("content://media/2", MediaType.VIDEO, "video/mp4"),
+        )
+
+        viewModel.onAction(ChatAction.MediaSelected(media))
+        viewModel.onAction(ChatAction.SendText)
+        advanceUntilIdle()
+
+        assertTrue(repository.sentTexts.isEmpty())
+        assertEquals(1, repository.sentMedia.size)
+        assertEquals(
+            media.map { it.toPendingMedia() },
+            repository.sentMedia.single().media,
+        )
+        assertEquals(null, repository.sentMedia.single().text)
+        assertTrue(viewModel.uiState.value.selectedAttachments.isEmpty())
+        assertEquals("", viewModel.uiState.value.composerText)
+        assertFalse(viewModel.uiState.value.isSendRequestInProgress)
+    }
+
+    @Test
+    fun mediaPlusTextSend_invokesMediaPathWithTrimmedText() = runTest(dispatcher) {
+        val repository = FakeChatRepository()
+        val viewModel = ChatViewModel(repository, FakeUserRepository())
+        val media = listOf(attachment("content://media/1", MediaType.IMAGE, "image/jpeg"))
+
+        viewModel.onAction(ChatAction.MediaSelected(media))
+        viewModel.onAction(ChatAction.ComposerTextChanged("  Caption  "))
+        viewModel.onAction(ChatAction.SendText)
+        advanceUntilIdle()
+
+        assertTrue(repository.sentTexts.isEmpty())
+        assertEquals(1, repository.sentMedia.size)
+        assertEquals("Caption", repository.sentMedia.single().text)
+        assertTrue(viewModel.uiState.value.selectedAttachments.isEmpty())
+        assertEquals("", viewModel.uiState.value.composerText)
+    }
+
+    @Test
+    fun mediaSendFailure_keepsSelectionAndComposerText() = runTest(dispatcher) {
+        val repository = FakeChatRepository().apply {
+            mediaSendFailure = IllegalStateException("media scheduler unavailable")
+        }
+        val viewModel = ChatViewModel(repository, FakeUserRepository())
+        val media = listOf(attachment("content://media/1", MediaType.IMAGE, "image/jpeg"))
+
+        viewModel.onAction(ChatAction.MediaSelected(media))
+        viewModel.onAction(ChatAction.ComposerTextChanged("Keep me"))
+        viewModel.onAction(ChatAction.SendText)
+        advanceUntilIdle()
+
+        assertEquals(
+            ChatEvent.ShowError("media scheduler unavailable"),
+            viewModel.events.first(),
+        )
+        assertEquals(media, viewModel.uiState.value.selectedAttachments)
+        assertEquals("Keep me", viewModel.uiState.value.composerText)
+        assertFalse(viewModel.uiState.value.isSendRequestInProgress)
+    }
+
+    @Test
+    fun attachmentClicked_requestsPickerWithRemainingCapacity() = runTest(dispatcher) {
+        val viewModel = ChatViewModel(FakeChatRepository(), FakeUserRepository())
+        viewModel.onAction(
+            ChatAction.MediaSelected(
+                listOf(attachment("content://media/1", MediaType.IMAGE, "image/jpeg")),
+            ),
+        )
+        viewModel.onAction(ChatAction.AttachmentClicked)
+        advanceUntilIdle()
+
+        assertEquals(ChatEvent.OpenMediaPicker(maxItems = 9), viewModel.events.first())
+    }
+
+    @Test
+    fun attachmentClicked_atLimit_emitsErrorWithoutPicker() = runTest(dispatcher) {
+        val viewModel = ChatViewModel(FakeChatRepository(), FakeUserRepository())
+        viewModel.onAction(
+            ChatAction.MediaSelected(
+                (1..10).map { index ->
+                    attachment("content://media/$index", MediaType.IMAGE, "image/jpeg")
+                },
+            ),
+        )
+        viewModel.onAction(ChatAction.AttachmentClicked)
+        advanceUntilIdle()
+
+        assertEquals(
+            ChatEvent.ShowError("You can attach up to 10 photos or videos."),
+            viewModel.events.first(),
+        )
+    }
+
+    @Test
+    fun blankTextWithoutMedia_doesNotSend() = runTest(dispatcher) {
         val repository = FakeChatRepository()
         val viewModel = ChatViewModel(repository, FakeUserRepository())
 
@@ -77,6 +224,31 @@ class ChatViewModelTest {
         advanceUntilIdle()
 
         assertTrue(repository.sentTexts.isEmpty())
+        assertTrue(repository.sentMedia.isEmpty())
+    }
+
+    @Test
+    fun mediaSelection_skipsDuplicateUris() = runTest(dispatcher) {
+        val viewModel = ChatViewModel(FakeChatRepository(), FakeUserRepository())
+        val first = attachment("content://media/1", MediaType.IMAGE, "image/jpeg")
+        val duplicate = attachment("content://media/1", MediaType.IMAGE, "image/jpeg")
+        val second = attachment("content://media/2", MediaType.VIDEO, "video/mp4")
+
+        viewModel.onAction(ChatAction.MediaSelected(listOf(first)))
+        viewModel.onAction(ChatAction.MediaSelected(listOf(duplicate, second)))
+        advanceUntilIdle()
+
+        assertEquals(listOf(first, second), viewModel.uiState.value.selectedAttachments)
+    }
+
+    @Test
+    fun emptyMediaSelected_isIgnored() = runTest(dispatcher) {
+        val viewModel = ChatViewModel(FakeChatRepository(), FakeUserRepository())
+
+        viewModel.onAction(ChatAction.MediaSelected(emptyList()))
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.selectedAttachments.isEmpty())
     }
 
     @Test
@@ -375,8 +547,10 @@ class ChatViewModelTest {
 private class FakeChatRepository : ChatRepository {
     val messages = MutableStateFlow<List<Message>>(emptyList())
     val sentTexts = mutableListOf<String>()
+    val sentMedia = mutableListOf<SentMediaMessage>()
     val retriedMessageIds = mutableListOf<UUID>()
     var sendFailure: Exception? = null
+    var mediaSendFailure: Exception? = null
     var loadLatestCount = 0
     var loadLatestFailure: Exception? = null
     var startRealtimeCount = 0
@@ -409,7 +583,10 @@ private class FakeChatRepository : ChatRepository {
         olderFailure?.let { throw it }
         return olderPageSize
     }
-    override suspend fun sendMediaMessage(media: List<PendingMedia>, text: String?) = unused()
+    override suspend fun sendMediaMessage(media: List<PendingMedia>, text: String?) {
+        sentMedia += SentMediaMessage(media = media, text = text)
+        mediaSendFailure?.let { throw it }
+    }
     override suspend fun retryMediaItem(messageId: UUID, mediaId: UUID) = unused()
     override suspend fun startRealtimeSync() {
         startRealtimeCount += 1
@@ -417,6 +594,22 @@ private class FakeChatRepository : ChatRepository {
     }
     override suspend fun stopRealtimeSync() = unused()
 }
+
+private data class SentMediaMessage(
+    val media: List<PendingMedia>,
+    val text: String?,
+)
+
+private fun attachment(
+    uri: String,
+    mediaType: MediaType,
+    mimeType: String,
+): ComposerAttachment =
+    ComposerAttachment(
+        uri = uri,
+        mediaType = mediaType,
+        mimeType = mimeType,
+    )
 
 private class FakeUserRepository(
     private val currentUserId: UUID = UUID.fromString("33eed91f-846c-49c8-851d-bca519b01432"),

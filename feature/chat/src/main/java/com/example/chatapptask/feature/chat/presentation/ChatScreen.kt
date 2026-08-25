@@ -1,6 +1,10 @@
 package com.example.chatapptask.feature.chat.presentation
 
 import android.content.res.Configuration
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -44,9 +48,11 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -60,6 +66,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
+import com.example.chatapptask.core.domain.model.MediaType
 import com.example.chatapptask.core.domain.model.Message
 import com.example.chatapptask.core.domain.model.MessageSendStatus
 import com.example.chatapptask.core.ui.clearFocusOnTap
@@ -69,22 +76,58 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.util.UUID
+import kotlinx.coroutines.launch
 
 @Composable
 fun ChatRoute(
     modifier: Modifier = Modifier,
-    onAttachmentClick: (() -> Unit)? = null,
     viewModel: ChatViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val lifecycleOwner = LocalLifecycleOwner.current
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val unsupportedMediaMessage = stringResource(R.string.chat_attachment_unsupported)
+
+    fun handlePickedUris(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        val resolved = resolveComposerAttachments(uris, context.contentResolver)
+        if (resolved.attachments.isNotEmpty()) {
+            viewModel.onAction(ChatAction.MediaSelected(resolved.attachments))
+        }
+        if (resolved.skippedUnsupportedCount > 0) {
+            scope.launch {
+                snackbarHostState.showSnackbar(unsupportedMediaMessage)
+            }
+        }
+    }
+
+    val multiMediaPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(
+            maxItems = MAX_COMPOSER_ATTACHMENTS,
+        ),
+    ) { uris -> handlePickedUris(uris) }
+
+    val singleMediaPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+    ) { uri -> handlePickedUris(listOfNotNull(uri)) }
 
     LaunchedEffect(viewModel, lifecycleOwner) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             viewModel.events.collect { event ->
                 when (event) {
                     is ChatEvent.ShowError -> snackbarHostState.showSnackbar(event.message)
+                    is ChatEvent.OpenMediaPicker -> {
+                        val request = PickVisualMediaRequest(
+                            ActivityResultContracts.PickVisualMedia.ImageAndVideo,
+                        )
+                        if (event.maxItems <= 1) {
+                            singleMediaPicker.launch(request)
+                        } else {
+                            multiMediaPicker.launch(request)
+                        }
+                    }
                 }
             }
         }
@@ -95,7 +138,6 @@ fun ChatRoute(
         onAction = viewModel::onAction,
         snackbarHostState = snackbarHostState,
         modifier = modifier,
-        onAttachmentClick = onAttachmentClick,
     )
 }
 
@@ -106,7 +148,6 @@ fun ChatScreen(
     onAction: (ChatAction) -> Unit,
     snackbarHostState: SnackbarHostState,
     modifier: Modifier = Modifier,
-    onAttachmentClick: (() -> Unit)? = null,
 ) {
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -127,12 +168,17 @@ fun ChatScreen(
         bottomBar = {
             ChatComposer(
                 text = state.composerText,
+                selectedAttachments = state.selectedAttachments,
                 isSending = state.isSendRequestInProgress,
+                canSend = state.canSend,
                 onTextChanged = { text ->
                     onAction(ChatAction.ComposerTextChanged(text))
                 },
                 onSend = { onAction(ChatAction.SendText) },
-                onAttachmentClick = onAttachmentClick,
+                onAttachmentClick = { onAction(ChatAction.AttachmentClicked) },
+                onRemoveAttachment = { uri ->
+                    onAction(ChatAction.RemoveSelectedMedia(uri))
+                },
                 modifier = Modifier.imePadding(),
             )
         },
@@ -330,67 +376,72 @@ private fun MessageSendState(
 @Composable
 fun ChatComposer(
     text: String,
+    selectedAttachments: List<ComposerAttachment>,
     isSending: Boolean,
+    canSend: Boolean,
     onTextChanged: (String) -> Unit,
     onSend: () -> Unit,
+    onAttachmentClick: () -> Unit,
+    onRemoveAttachment: (uri: String) -> Unit,
     modifier: Modifier = Modifier,
-    onAttachmentClick: (() -> Unit)? = null,
 ) {
-    val canSend = text.isNotBlank() && !isSending
-    val attachmentDescription = if (onAttachmentClick == null) {
-        stringResource(R.string.chat_attachment_unavailable)
-    } else {
-        stringResource(R.string.chat_attachment)
-    }
+    val attachmentDescription = stringResource(R.string.chat_attachment)
 
     Surface(
         modifier = modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surface,
         tonalElevation = 3.dp,
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.Bottom,
-        ) {
-            OutlinedIconButton(
-                onClick = { onAttachmentClick?.invoke() },
-                enabled = onAttachmentClick != null && !isSending,
-                modifier = Modifier.semantics {
-                    contentDescription = attachmentDescription
-                },
-            ) {
-                Text(
-                    text = "+",
-                    style = MaterialTheme.typography.titleLarge,
-                )
-            }
-            Spacer(Modifier.width(8.dp))
-            OutlinedTextField(
-                value = text,
-                onValueChange = onTextChanged,
-                modifier = Modifier.weight(1f),
-                placeholder = { Text(stringResource(R.string.chat_composer_placeholder)) },
-                minLines = 1,
-                maxLines = 4,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(
-                    onSend = { if (canSend) onSend() },
-                ),
+        Column(modifier = Modifier.fillMaxWidth()) {
+            ComposerAttachmentPreviewRow(
+                attachments = selectedAttachments,
+                onRemove = onRemoveAttachment,
+                enabled = !isSending,
             )
-            Spacer(Modifier.width(8.dp))
-            Button(
-                onClick = onSend,
-                enabled = canSend,
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+            Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.Bottom,
             ) {
-                if (isSending) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        strokeWidth = 2.dp,
+                OutlinedIconButton(
+                    onClick = onAttachmentClick,
+                    enabled = !isSending,
+                    modifier = Modifier.semantics {
+                        contentDescription = attachmentDescription
+                    },
+                ) {
+                    Text(
+                        text = "+",
+                        style = MaterialTheme.typography.titleLarge,
                     )
-                } else {
-                    Text(stringResource(R.string.chat_send))
+                }
+                Spacer(Modifier.width(8.dp))
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = onTextChanged,
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text(stringResource(R.string.chat_composer_placeholder)) },
+                    minLines = 1,
+                    maxLines = 4,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(
+                        onSend = { if (canSend) onSend() },
+                    ),
+                )
+                Spacer(Modifier.width(8.dp))
+                Button(
+                    onClick = onSend,
+                    enabled = canSend,
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+                ) {
+                    if (isSending) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Text(stringResource(R.string.chat_send))
+                    }
                 }
             }
         }
@@ -462,6 +513,18 @@ private val previewOtherUserId = UUID.fromString("44eed91f-846c-49c8-851d-bca519
 
 private val previewState = ChatUiState(
     currentUserId = previewCurrentUserId,
+    selectedAttachments = listOf(
+        ComposerAttachment(
+            uri = "content://preview/image-1",
+            mediaType = MediaType.IMAGE,
+            mimeType = "image/jpeg",
+        ),
+        ComposerAttachment(
+            uri = "content://preview/video-1",
+            mediaType = MediaType.VIDEO,
+            mimeType = "video/mp4",
+        ),
+    ),
     messages = listOf(
         previewMessage(
             id = "00000000-0000-0000-0000-000000000004",

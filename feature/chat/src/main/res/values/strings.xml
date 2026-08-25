@@ -6,7 +6,14 @@
     <string name="chat_composer_placeholder">Message</string>
     <string name="chat_send">Send</string>
     <string name="chat_attachment">Add attachment</string>
-    <string name="chat_attachment_unavailable">Attachments coming soon</string>
+    <string name="chat_attachment_count">%1$d / %2$d selected</string>
+    <string name="chat_attachment_remove">Remove attachment</string>
+    <string name="chat_attachment_image">Selected image</string>
+    <string name="chat_attachment_video">Selected video</string>
+    <string name="chat_attachment_video_badge">Video</string>
+    <string name="chat_attachment_image_placeholder">Image</string>
+    <string name="chat_attachment_video_placeholder">Video</string>
+    <string name="chat_attachment_unsupported">Some selected items are not supported photos or videos.</string>
     <string name="chat_sending">Sending…</string>
     <string name="chat_sent">Sent</string>
     <string name="chat_failed">Not sent</string>
