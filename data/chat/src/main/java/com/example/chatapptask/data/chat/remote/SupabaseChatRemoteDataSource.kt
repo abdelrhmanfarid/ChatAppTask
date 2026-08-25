@@ -149,6 +149,24 @@ class SupabaseChatRemoteDataSource @Inject constructor(
         return storagePath
     }
 
+    override suspend fun uploadProfileImage(
+        userId: UUID,
+        bytes: ByteArray,
+        mimeType: String,
+        fileExtension: String,
+    ): String {
+        val normalizedExtension = normalizeExtension(fileExtension)
+        val storagePath = "$userId/avatar.$normalizedExtension"
+        supabaseClient.storage[PROFILE_IMAGES_BUCKET].upload(
+            path = storagePath,
+            data = bytes,
+        ) {
+            upsert = true
+            contentType = ContentType.parse(mimeType)
+        }
+        return storagePath
+    }
+
     override suspend fun deleteChatMediaObject(storagePath: String) {
         supabaseClient.storage[CHAT_MEDIA_BUCKET].delete(validateChatMediaPath(storagePath))
     }
@@ -233,6 +251,7 @@ class SupabaseChatRemoteDataSource @Inject constructor(
         const val MESSAGE_MEDIA_TABLE = "message_media"
         const val CREATE_MEDIA_MESSAGE_RPC = "create_media_message"
         const val CHAT_MEDIA_BUCKET = "chat-media"
+        const val PROFILE_IMAGES_BUCKET = "profile-images"
 
         val FILE_EXTENSION_PATTERN = Regex("[a-z0-9]+")
     }

@@ -403,6 +403,12 @@ private class RecordingRemoteDataSource(
         bytes: ByteArray,
         mimeType: String,
     ): String = unused()
+    override suspend fun uploadProfileImage(
+        userId: UUID,
+        bytes: ByteArray,
+        mimeType: String,
+        fileExtension: String,
+    ): String = unused()
     override suspend fun deleteChatMediaObject(storagePath: String) = unused()
 }
 

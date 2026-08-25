@@ -1,7 +1,12 @@
 package com.example.chatapptask.feature.profile.presentation
 
 import android.content.res.Configuration
-import androidx.compose.foundation.layout.Arrangement
+import android.graphics.BitmapFactory
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -9,7 +14,6 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -34,9 +38,15 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -50,23 +60,33 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.chatapptask.feature.profile.R
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
 fun ProfileSetupRoute(
     onProfileSaved: () -> Unit,
     modifier: Modifier = Modifier,
-    onProfileImageSelectionRequested: () -> Unit = {},
     viewModel: ProfileSetupViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    val photoPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        if (uri != null) {
+            viewModel.onAction(ProfileSetupAction.ProfileImageSelected(uri.toString()))
+        }
+    }
 
     LaunchedEffect(viewModel) {
         viewModel.events.collect { event ->
             when (event) {
                 ProfileSetupEvent.ProfileSaved -> onProfileSaved()
                 ProfileSetupEvent.ProfileImageSelectionRequested -> {
-                    onProfileImageSelectionRequested()
+                    photoPicker.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                    )
                 }
 
                 is ProfileSetupEvent.ShowError -> snackbarHostState.showSnackbar(event.message)
@@ -91,25 +111,26 @@ fun ProfileSetupScreen(
 ) {
     val focusManager = LocalFocusManager.current
     val addPhotoDescription = stringResource(R.string.profile_setup_add_photo)
+    val previewBitmap = rememberProfilePreviewBitmap(state.selectedImageUri)
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         contentWindowInsets = WindowInsets.safeDrawing,
     ) { contentPadding ->
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(contentPadding)
-                .imePadding(),
-            contentAlignment = Alignment.TopCenter,
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp, vertical = 32.dp)
+                .fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .widthIn(max = 480.dp)
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 24.dp, vertical = 32.dp),
+                    .widthIn(max = 480.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(
@@ -132,23 +153,43 @@ fun ProfileSetupScreen(
                     modifier = Modifier
                         .size(128.dp)
                         .semantics { contentDescription = addPhotoDescription },
+                    enabled = !state.isSaving,
                     shape = CircleShape,
                     color = MaterialTheme.colorScheme.secondaryContainer,
                     contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Text(
-                            text = "+",
-                            style = MaterialTheme.typography.displayMedium,
-                            fontWeight = FontWeight.Light,
+                    if (previewBitmap != null) {
+                        Image(
+                            bitmap = previewBitmap,
+                            contentDescription = addPhotoDescription,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(CircleShape),
+                            contentScale = ContentScale.Crop,
                         )
+                    } else {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(
+                                text = "+",
+                                style = MaterialTheme.typography.displayMedium,
+                                fontWeight = FontWeight.Light,
+                            )
+                        }
                     }
                 }
                 TextButton(
                     onClick = { onAction(ProfileSetupAction.ProfileImageClicked) },
                     enabled = !state.isSaving,
                 ) {
-                    Text(stringResource(R.string.profile_setup_add_photo))
+                    Text(
+                        stringResource(
+                            if (state.selectedImageUri == null) {
+                                R.string.profile_setup_add_photo
+                            } else {
+                                R.string.profile_setup_change_photo
+                            },
+                        ),
+                    )
                 }
                 Spacer(Modifier.height(24.dp))
 
@@ -213,6 +254,23 @@ fun ProfileSetupScreen(
             }
         }
     }
+}
+
+@Composable
+private fun rememberProfilePreviewBitmap(uriString: String?): ImageBitmap? {
+    val context = LocalContext.current
+    val preview by produceState<ImageBitmap?>(initialValue = null, uriString, context) {
+        value = null
+        val uri = uriString?.let(Uri::parse) ?: return@produceState
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    BitmapFactory.decodeStream(input)?.asImageBitmap()
+                }
+            }.getOrNull()
+        }
+    }
+    return preview
 }
 
 @Preview(

@@ -185,6 +185,12 @@ private class FakeUserRepository(
     override fun observeUser(userId: UUID): Flow<User?> = unused()
 
     override suspend fun upsertUser(user: User) = unused()
+
+    override suspend fun uploadProfileImage(
+        bytes: ByteArray,
+        mimeType: String,
+        fileExtension: String,
+    ) = unused()
 }
 
 private fun unused(): Nothing = error("Not used by this test.")

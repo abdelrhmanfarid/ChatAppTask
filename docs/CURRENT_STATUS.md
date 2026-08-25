@@ -40,7 +40,7 @@ Branch: `feature/text-messaging`. Repository code is authoritative; check `git s
 - Debug builds install Ktor `Logging` at `HEADERS` level under Logcat tag `SupabaseHttp`; credential headers are redacted and bodies are not logged. Release uses a no-op and has no logging dependency.
 - `SupabaseChatRemoteDataSource` implements users, text insert, message queries, media RPC/storage primitives, and DTO mapping.
 - `DefaultUserRepository` is local-first for lookup, caches remote users, and upserts remote then Room.
-- Profile Setup saves username plus optional positive integer age. Photo selection is callback-only; upload is not implemented.
+- Profile Setup saves username plus optional positive integer age. Optional profile photo uses the system Photo Picker, local preview, then Storage upload of `{userId}/avatar.{ext}` into bucket `profile-images` before user upsert. Keyboard uses Scaffold `safeDrawing` only (no extra `imePadding`).
 
 ### Presentation
 
@@ -56,7 +56,6 @@ Branch: `feature/text-messaging`. Repository code is authoritative; check `git s
 - Pagination UI/triggering and initial remote-to-Room message synchronization.
 - Realtime synchronization (`startRealtimeSync`/`stopRealtimeSync` are unsupported); installing the plugin alone does not sync data.
 - Media repository orchestration, media worker/retry flow, picker/permissions, upload UI, and media rendering.
-- Profile image upload.
 - Supabase Auth, FCM, presence, typing indicators, and read receipts.
 
 ## Working Conventions

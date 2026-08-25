@@ -40,5 +40,12 @@ interface ChatRemoteDataSource {
         mimeType: String,
     ): String
 
+    suspend fun uploadProfileImage(
+        userId: UUID,
+        bytes: ByteArray,
+        mimeType: String,
+        fileExtension: String,
+    ): String
+
     suspend fun deleteChatMediaObject(storagePath: String)
 }

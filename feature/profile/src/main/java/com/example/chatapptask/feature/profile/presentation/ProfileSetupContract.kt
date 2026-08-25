@@ -3,6 +3,7 @@ package com.example.chatapptask.feature.profile.presentation
 data class ProfileSetupUiState(
     val username: String = "",
     val ageInput: String = "",
+    val selectedImageUri: String? = null,
     val isSaving: Boolean = false,
 ) {
     val isUsernameValid: Boolean
@@ -13,7 +14,6 @@ data class ProfileSetupUiState(
 
     val canSave: Boolean
         get() = isUsernameValid && isAgeValid && !isSaving
-
 }
 
 sealed interface ProfileSetupAction {
@@ -22,6 +22,8 @@ sealed interface ProfileSetupAction {
     data class AgeChanged(val age: String) : ProfileSetupAction
 
     data object ProfileImageClicked : ProfileSetupAction
+
+    data class ProfileImageSelected(val uri: String) : ProfileSetupAction
 
     data object SaveClicked : ProfileSetupAction
 }

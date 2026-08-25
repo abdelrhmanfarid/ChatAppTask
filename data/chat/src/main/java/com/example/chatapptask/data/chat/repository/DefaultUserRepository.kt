@@ -31,4 +31,18 @@ class DefaultUserRepository @Inject constructor(
         val savedUser = remoteDataSource.upsertUser(user)
         localDataSource.upsertUser(savedUser)
     }
+
+    override suspend fun uploadProfileImage(
+        bytes: ByteArray,
+        mimeType: String,
+        fileExtension: String,
+    ): String {
+        val userId = userIdentityStore.getOrCreateUserId()
+        return remoteDataSource.uploadProfileImage(
+            userId = userId,
+            bytes = bytes,
+            mimeType = mimeType,
+            fileExtension = fileExtension,
+        )
+    }
 }
