@@ -110,6 +110,45 @@ class DefaultChatRepositoryTest {
     }
 
     @Test
+    fun cancelOutgoingSend_cancelsWorkAndMarksSendingFailed_withoutRemoteCall() = runBlocking {
+        val events = mutableListOf<String>()
+        val messageId = UUID.fromString("7b1f9c0e-2d44-4a1b-9c3e-0f8a2b6d4e11")
+        val local = RecordingLocalDataSource(events).apply {
+            seedMessage(persistedTextMessage(messageId, MessageSendStatus.SENDING))
+        }
+        val remote = RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt)
+        val scheduler = RecordingTextMessageSendScheduler(events)
+        val repository = createRepository(local, remote, scheduler)
+
+        repository.cancelOutgoingSend(messageId)
+
+        assertEquals(listOf(messageId), scheduler.cancelled)
+        assertEquals(MessageSendStatus.FAILED, requireNotNull(local.currentMessage).sendStatus)
+        assertTrue(remote.messageIds.isEmpty())
+        assertEquals(0, local.upsertCount)
+        assertEquals(listOf("scheduler:cancel", "local:FAILED"), events)
+        assertEquals("Send cancelled.", local.stateUpdates.last().lastError)
+    }
+
+    @Test
+    fun cancelOutgoingSend_whenAlreadySent_cancelsWorkButLeavesSent() = runBlocking {
+        val events = mutableListOf<String>()
+        val messageId = UUID.fromString("0c9e4b77-8a21-4d5f-b3c1-6e5a9f2d8c40")
+        val local = RecordingLocalDataSource(events).apply {
+            seedMessage(persistedTextMessage(messageId, MessageSendStatus.SENT))
+        }
+        val remote = RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt)
+        val scheduler = RecordingTextMessageSendScheduler(events)
+        val repository = createRepository(local, remote, scheduler)
+
+        repository.cancelOutgoingSend(messageId)
+
+        assertEquals(listOf(messageId), scheduler.cancelled)
+        assertEquals(MessageSendStatus.SENT, requireNotNull(local.currentMessage).sendStatus)
+        assertEquals(listOf("scheduler:cancel"), events)
+    }
+
+    @Test
     fun retryMessage_missingLocalMessage_failsWithoutScheduling() = runBlocking {
         val messageId = UUID.fromString("a4558744-b5f6-4ca3-8f81-9ba9750565ea")
         val local = RecordingLocalDataSource(mutableListOf())
@@ -572,11 +611,17 @@ private class RecordingTextMessageSendScheduler(
     private val failure: Exception? = null,
 ) : TextMessageSendScheduler {
     val messages = mutableListOf<ScheduledMessage>()
+    val cancelled = mutableListOf<UUID>()
 
     override suspend fun enqueue(messageId: UUID, reason: TextMessageScheduleReason) {
         messages += ScheduledMessage(messageId, reason)
         events += "scheduler:enqueue"
         failure?.let { throw it }
+    }
+
+    override suspend fun cancel(messageId: UUID) {
+        cancelled += messageId
+        events += "scheduler:cancel"
     }
 }
 

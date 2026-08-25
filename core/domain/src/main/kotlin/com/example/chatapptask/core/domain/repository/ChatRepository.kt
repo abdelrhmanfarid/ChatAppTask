@@ -26,6 +26,15 @@ interface ChatRepository {
 
     suspend fun retryMessage(messageId: UUID)
 
+    /**
+     * Cancels outstanding unique send work for [messageId].
+     *
+     * This does not undo a remote insert that already succeeded. A local row
+     * still marked sending is marked failed so it can be retried with the same
+     * UUID. Realtime or a later fetch may still reconcile it to sent.
+     */
+    suspend fun cancelOutgoingSend(messageId: UUID)
+
     suspend fun retryMediaItem(
         messageId: UUID,
         mediaId: UUID,

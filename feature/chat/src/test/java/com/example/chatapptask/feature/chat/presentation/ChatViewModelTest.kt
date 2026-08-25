@@ -225,6 +225,8 @@ private class FakeChatRepository : ChatRepository {
         retriedMessageIds += messageId
     }
 
+    override suspend fun cancelOutgoingSend(messageId: UUID) = unused()
+
     override suspend fun loadLatestMessages(limit: Int) {
         loadLatestCount += 1
         loadLatestFailure?.let { throw it }

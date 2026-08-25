@@ -19,7 +19,7 @@ Branch: `feature/text-messaging`. Repository code is authoritative; check `git s
 ### Data and domain
 
 - Domain models: `User`, `Message`, `MessageMedia`, `PendingMedia`; send states are `SENDING`, `SENT`, `FAILED`.
-- `ChatRepository` declares observation, paging, text/media send/retry, and Realtime lifecycle operations.
+- `ChatRepository` declares observation, paging, text/media send/retry, outgoing-send cancel, and Realtime lifecycle operations.
 - `UserRepository` supports current local identity, local/remote user lookup, observation, and upsert. Identity is a version-3 name UUID from the device `ANDROID_ID` (UTF-8, trimmed/lowercased). Missing/blank `ANDROID_ID` fails explicitly instead of generating a random UUID. Previous random DataStore identities are obsolete; clear local app data and development Supabase rows before testing.
 - `ChatAppDatabase` v1 (`chat_app.db`) contains `users`, `messages`, and `message_media`; schema export is enabled.
 - Room message observation is ordered `created_at DESC, id DESC` and combines message/media rows.
@@ -29,7 +29,8 @@ Branch: `feature/text-messaging`. Repository code is authoritative; check `git s
 
 - `DefaultChatRepository.sendTextMessage` creates one local UUID, persists an optimistic `SENDING` Room row, then schedules unique work.
 - `TextMessageSendScheduler` uses unique work `send-text-message:<UUID>`, connected-network constraint, exponential minimum backoff, `KEEP` initially, and `REPLACE` for manual retry.
-- `SendTextMessageWorker` delegates persisted sending to `DefaultChatRepository` through Hilt.
+- `SendTextMessageWorker` delegates persisted sending to `DefaultChatRepository` through Hilt. It promotes the existing unique work to a foreground worker (`setForeground` / `getForegroundInfo`) with an ongoing privacy-conscious "Sending message" notification. Notification/work IDs are derived from unique work name `send-text-message:<UUID>`. Success, terminal failure, and backoff remove the active notification; the next execution shows it again. The active notification exposes Cancel only (not Retry) so REPLACE cannot race an in-flight insert. Cancel goes through `MessageSendWorkActionReceiver` → `ChatRepository.cancelOutgoingSend` (same UUID). Worker `CancellationException` is rethrown, not mapped to `Result.retry()`. Chat UI remains the retry path after `FAILED`. Cancel stops unique work and marks a still-`SENDING` row `FAILED`; it does not undo a completed Supabase insert (Realtime/fetch may still reconcile to `SENT`).
+- One idempotent notification channel `message_send_work` is created from `ChatApp` and before posting. It is reused later for media-upload progress (`MessageSendWorkProgress.Determinate`). Android 13+ `POST_NOTIFICATIONS` is requested once when Chat opens; denial does not block persist/send. `FOREGROUND_SERVICE` / `FOREGROUND_SERVICE_DATA_SYNC` are declared for WorkManager foreground execution.
 - Immediately before each remote insert, Room atomically sets `SENDING`, clears the error, and increments `send_attempt_count`.
 - Supabase inserts using the same UUID. Success reconciles server `createdAt`/`updatedAt` and marks `SENT` without resetting local attempt metadata.
 - Failure retains the row, marks `FAILED`, stores the error, preserves the increment, and causes WorkManager retry for retryable exceptions.
@@ -56,8 +57,8 @@ Branch: `feature/text-messaging`. Repository code is authoritative; check `git s
 ## Not Implemented
 
 - Chat UI older-page pagination triggers (`loadOlderMessages` is implemented in the repository only).
-- Media repository orchestration, media worker/retry flow, picker/permissions, upload UI, and media rendering.
-- Supabase Auth, FCM, presence, typing indicators, and read receipts.
+- Media repository orchestration, media worker/retry flow, picker/permissions, upload UI, and media rendering (the send-work notification channel/progress helper is ready to reuse).
+- Incoming-message push / FCM, Supabase Auth, presence, typing indicators, and read receipts.
 
 ## Working Conventions
 

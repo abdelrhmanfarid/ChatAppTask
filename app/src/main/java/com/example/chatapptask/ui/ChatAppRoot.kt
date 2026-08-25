@@ -23,7 +23,10 @@ fun ChatAppRoot(
             onProfileSaved = viewModel::onProfileSaved,
             modifier = modifier,
         )
-        StartupDestination.Chat -> ChatRoute(modifier = modifier)
+        StartupDestination.Chat -> {
+            MessageSendNotificationPermissionEffect()
+            ChatRoute(modifier = modifier)
+        }
         StartupDestination.Error -> StartupErrorScreen(
             onRetry = viewModel::retry,
             modifier = modifier,

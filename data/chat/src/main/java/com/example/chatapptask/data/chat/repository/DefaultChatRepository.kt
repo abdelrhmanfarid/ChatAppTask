@@ -72,6 +72,17 @@ class DefaultChatRepository @Inject constructor(
         schedulePersistedTextMessage(messageId, TextMessageScheduleReason.MANUAL_RETRY)
     }
 
+    override suspend fun cancelOutgoingSend(messageId: UUID) {
+        textMessageSendScheduler.cancel(messageId)
+        val message = localDataSource.getMessageById(messageId) ?: return
+        if (message.sendStatus == MessageSendStatus.SENDING) {
+            localDataSource.markMessageSendFailed(
+                messageId = messageId,
+                lastError = CANCELLED_SEND_ERROR,
+            )
+        }
+    }
+
     internal suspend fun sendPersistedTextMessage(messageId: UUID) {
         val message = requirePersistedTextMessage(messageId)
 
@@ -215,6 +226,7 @@ class DefaultChatRepository @Inject constructor(
     private companion object {
         const val UNKNOWN_SEND_ERROR = "Remote text-message insert failed."
         const val UNKNOWN_SCHEDULING_ERROR = "Text-message scheduling failed."
+        const val CANCELLED_SEND_ERROR = "Send cancelled."
     }
 }
 

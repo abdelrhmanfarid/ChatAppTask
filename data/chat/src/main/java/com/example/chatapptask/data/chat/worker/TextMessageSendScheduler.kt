@@ -17,6 +17,8 @@ import javax.inject.Inject
 
 interface TextMessageSendScheduler {
     suspend fun enqueue(messageId: UUID, reason: TextMessageScheduleReason)
+
+    suspend fun cancel(messageId: UUID)
 }
 
 enum class TextMessageScheduleReason(
@@ -37,6 +39,10 @@ class WorkManagerTextMessageSendScheduler @Inject constructor(
             reason.existingWorkPolicy,
             textMessageWorkRequest(messageId),
         ).await()
+    }
+
+    override suspend fun cancel(messageId: UUID) {
+        workManager.cancelUniqueWork(textMessageUniqueWorkName(messageId)).await()
     }
 }
 
