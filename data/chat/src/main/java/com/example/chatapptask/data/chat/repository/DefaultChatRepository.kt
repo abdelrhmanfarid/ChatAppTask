@@ -1,11 +1,14 @@
 package com.example.chatapptask.data.chat.repository
 
 import com.example.chatapptask.core.common.identity.UserIdentityStore
+import com.example.chatapptask.core.domain.model.MediaUploadStatus
 import com.example.chatapptask.core.domain.model.Message
+import com.example.chatapptask.core.domain.model.MessageMedia
 import com.example.chatapptask.core.domain.model.MessageSendStatus
 import com.example.chatapptask.core.domain.model.PendingMedia
 import com.example.chatapptask.core.domain.repository.ChatRepository
 import com.example.chatapptask.data.chat.local.ChatLocalDataSource
+import com.example.chatapptask.data.chat.local.OutgoingMediaStore
 import com.example.chatapptask.data.chat.remote.ChatRemoteDataSource
 import com.example.chatapptask.data.chat.worker.TextMessageSendScheduler
 import com.example.chatapptask.data.chat.worker.TextMessageScheduleReason
@@ -23,6 +26,7 @@ class DefaultChatRepository @Inject constructor(
     private val remoteDataSource: ChatRemoteDataSource,
     private val userIdentityStore: UserIdentityStore,
     private val textMessageSendScheduler: TextMessageSendScheduler,
+    private val outgoingMediaStore: OutgoingMediaStore,
 ) : ChatRepository {
     private val realtimeMutex = Mutex()
     private var realtimeJob: Job? = null
@@ -134,7 +138,53 @@ class DefaultChatRepository @Inject constructor(
     override suspend fun sendMediaMessage(
         media: List<PendingMedia>,
         text: String?,
-    ) = unsupported("sendMediaMessage")
+    ) {
+        require(media.isNotEmpty()) { MEDIA_COUNT_REQUIRED }
+        require(media.size <= MAX_MEDIA_ITEMS) { MEDIA_COUNT_LIMIT }
+
+        val senderId = userIdentityStore.getOrCreateUserId()
+        val messageId = UUID.randomUUID()
+        val now = Instant.now()
+        try {
+            val persistedMedia = media.mapIndexed { index, pending ->
+                val mediaId = UUID.randomUUID()
+                val durableUri = outgoingMediaStore.copyIncoming(
+                    sourceUri = pending.localUri,
+                    messageId = messageId,
+                    mediaId = mediaId,
+                    mimeType = pending.mimeType,
+                )
+                MessageMedia(
+                    id = mediaId,
+                    messageId = messageId,
+                    storagePath = null,
+                    mediaType = pending.mediaType,
+                    mimeType = pending.mimeType,
+                    position = index,
+                    sizeBytes = pending.sizeBytes,
+                    width = pending.width,
+                    height = pending.height,
+                    localUri = durableUri,
+                    uploadStatus = MediaUploadStatus.PENDING,
+                )
+            }
+            localDataSource.upsertMessage(
+                Message(
+                    id = messageId,
+                    senderId = senderId,
+                    textContent = text,
+                    createdAt = now,
+                    updatedAt = now,
+                    media = persistedMedia,
+                    sendStatus = MessageSendStatus.SENDING,
+                ),
+            )
+        } catch (exception: Exception) {
+            runCatching { outgoingMediaStore.deleteCopiedMedia(messageId) }
+            runCatching { localDataSource.deleteMessage(messageId) }
+            throw exception
+        }
+    }
 
     override suspend fun retryMediaItem(
         messageId: UUID,
@@ -225,6 +275,9 @@ class DefaultChatRepository @Inject constructor(
         const val UNKNOWN_SEND_ERROR = "Remote text-message insert failed."
         const val UNKNOWN_SCHEDULING_ERROR = "Text-message scheduling failed."
         const val CANCELLED_SEND_ERROR = "Send cancelled."
+        const val MEDIA_COUNT_REQUIRED = "A media message requires at least one attachment."
+        const val MEDIA_COUNT_LIMIT = "A media message can include at most 10 attachments."
+        const val MAX_MEDIA_ITEMS = 10
     }
 }
 

@@ -1,6 +1,6 @@
 # Current Status
 
-Branch: `feature/text-messaging`. Repository code is authoritative; check `git status` before work.
+Branch: `feature/media-messaging`. Repository code is authoritative; check `git status` before work.
 
 ## Modules
 
@@ -36,6 +36,11 @@ Branch: `feature/text-messaging`. Repository code is authoritative; check `git s
 - Failure retains the row, marks `FAILED`, stores the error, preserves the increment, and causes WorkManager retry for retryable exceptions.
 - `ChatApp` supplies `HiltWorkerFactory`; the manifest disables WorkManager's default initializer.
 
+### Local media persist (no upload yet)
+
+- `DefaultChatRepository.sendMediaMessage` validates 1–10 items, copies each picker URI into `filesDir/outgoing-media/{messageId}/{mediaId}.{ext}` via `OutgoingMediaStore` / `FileOutgoingMediaStore`, then upserts one optimistic Room `Message` (`SENDING`) plus `MessageMedia` rows (`PENDING`, durable `localUri`, no `storagePath`). WorkManager is not scheduled.
+- Copy or persist failure deletes the message directory and the Room message row (media cascades). Text send, retry, cancel, Realtime, and pagination are unchanged.
+
 ### Network and users
 
 - Supabase Kotlin 3.6.0 uses Ktor OkHttp 3.5.1 with PostgREST, Storage, and Realtime plugins installed.
@@ -57,7 +62,7 @@ Branch: `feature/text-messaging`. Repository code is authoritative; check `git s
 
 ## Not Implemented
 
-- Media repository orchestration, media worker/retry flow, picker/permissions, upload UI, and media rendering (the send-work notification channel/progress helper is ready to reuse).
+- Media WorkManager/upload/retry/cancel, picker/permissions, upload UI, and media rendering (local persist of outgoing media messages is implemented; the send-work notification channel/progress helper is ready to reuse).
 - Incoming-message push / FCM, Supabase Auth, presence, typing indicators, and read receipts.
 
 ## Working Conventions

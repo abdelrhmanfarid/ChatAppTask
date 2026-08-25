@@ -20,6 +20,8 @@ interface ChatLocalDataSource {
 
     suspend fun upsertMessage(message: Message)
 
+    suspend fun deleteMessage(messageId: UUID)
+
     suspend fun upsertMessages(messages: List<Message>)
 
     suspend fun getMessageById(messageId: UUID): Message?

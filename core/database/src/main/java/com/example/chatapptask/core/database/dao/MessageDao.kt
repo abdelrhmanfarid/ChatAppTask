@@ -20,6 +20,9 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE id = :messageId LIMIT 1")
     suspend fun getMessageById(messageId: UUID): MessageEntity?
 
+    @Query("DELETE FROM messages WHERE id = :messageId")
+    suspend fun deleteMessage(messageId: UUID)
+
     @Query("SELECT * FROM messages ORDER BY created_at DESC, id DESC")
     fun observeMessages(): Flow<List<MessageEntity>>
 

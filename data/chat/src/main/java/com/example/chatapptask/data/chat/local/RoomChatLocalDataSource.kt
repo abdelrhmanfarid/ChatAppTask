@@ -47,6 +47,10 @@ class RoomChatLocalDataSource @Inject constructor(
         }
     }
 
+    override suspend fun deleteMessage(messageId: UUID) {
+        messageDao.deleteMessage(messageId)
+    }
+
     override suspend fun upsertMessages(messages: List<Message>) {
         messageDao.upsertMessages(messages.map { message -> message.toEntity() })
         val media = messages.flatMap(Message::media)

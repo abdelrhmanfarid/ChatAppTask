@@ -1,6 +1,8 @@
 package com.example.chatapptask.data.chat.di
 
 import com.example.chatapptask.data.chat.local.ChatLocalDataSource
+import com.example.chatapptask.data.chat.local.FileOutgoingMediaStore
+import com.example.chatapptask.data.chat.local.OutgoingMediaStore
 import com.example.chatapptask.data.chat.local.RoomChatLocalDataSource
 import com.example.chatapptask.data.chat.remote.ChatRemoteDataSource
 import com.example.chatapptask.data.chat.remote.SupabaseChatRemoteDataSource
@@ -32,6 +34,11 @@ abstract class ChatDataSourceModule {
     abstract fun bindChatLocalDataSource(
         implementation: RoomChatLocalDataSource,
     ): ChatLocalDataSource
+
+    @Binds
+    abstract fun bindOutgoingMediaStore(
+        implementation: FileOutgoingMediaStore,
+    ): OutgoingMediaStore
 
     @Binds
     abstract fun bindChatRemoteDataSource(

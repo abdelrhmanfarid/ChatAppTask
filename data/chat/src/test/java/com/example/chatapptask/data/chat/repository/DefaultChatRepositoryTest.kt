@@ -6,8 +6,10 @@ import com.example.chatapptask.core.domain.model.MediaUploadStatus
 import com.example.chatapptask.core.domain.model.Message
 import com.example.chatapptask.core.domain.model.MessageMedia
 import com.example.chatapptask.core.domain.model.MessageSendStatus
+import com.example.chatapptask.core.domain.model.PendingMedia
 import com.example.chatapptask.core.domain.model.User
 import com.example.chatapptask.data.chat.local.ChatLocalDataSource
+import com.example.chatapptask.data.chat.local.OutgoingMediaStore
 import com.example.chatapptask.data.chat.remote.ChatRemoteDataSource
 import com.example.chatapptask.data.chat.worker.TextMessageSendScheduler
 import com.example.chatapptask.data.chat.worker.TextMessageScheduleReason
@@ -167,6 +169,206 @@ class DefaultChatRepositoryTest {
         assertTrue(scheduler.messages.isEmpty())
         assertTrue(remote.messageIds.isEmpty())
         assertEquals(0, local.upsertCount)
+    }
+
+    @Test
+    fun sendMediaMessage_singleItem_persistsSendingWithPendingDurableCopy() = runBlocking {
+        val events = mutableListOf<String>()
+        val local = RecordingLocalDataSource(events)
+        val remote = RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt)
+        val scheduler = RecordingTextMessageSendScheduler(events)
+        val store = RecordingOutgoingMediaStore(events)
+        val repository = createRepository(local, remote, scheduler, store)
+        val pending = pendingMedia("content://picker/one", mimeType = "image/jpeg")
+
+        repository.sendMediaMessage(listOf(pending), text = "caption")
+
+        val message = requireNotNull(local.persistedMessage)
+        val media = message.media.single()
+        assertEquals(1, local.upsertCount)
+        assertEquals(MessageSendStatus.SENDING, message.sendStatus)
+        assertEquals(senderId, message.senderId)
+        assertEquals("caption", message.textContent)
+        assertEquals(MediaUploadStatus.PENDING, media.uploadStatus)
+        assertEquals(null, media.storagePath)
+        assertEquals(0, media.position)
+        assertEquals(pending.mimeType, media.mimeType)
+        assertEquals(pending.mediaType, media.mediaType)
+        assertEquals(pending.sizeBytes, media.sizeBytes)
+        assertEquals(pending.width, media.width)
+        assertEquals(pending.height, media.height)
+        assertEquals(store.copied.single().durableUri, media.localUri)
+        assertEquals(message.id, store.copied.single().messageId)
+        assertEquals(media.id, store.copied.single().mediaId)
+        assertTrue(scheduler.messages.isEmpty())
+        assertTrue(remote.messageIds.isEmpty())
+        assertEquals(listOf("store:copy", "local:SENDING"), events)
+    }
+
+    @Test
+    fun sendMediaMessage_multipleItems_preserveOrderAndUniqueMediaIds() = runBlocking {
+        val store = RecordingOutgoingMediaStore(mutableListOf())
+        val local = RecordingLocalDataSource(mutableListOf())
+        val repository = createRepository(
+            local,
+            RecordingRemoteDataSource(mutableListOf(), serverCreatedAt, serverUpdatedAt),
+            RecordingTextMessageSendScheduler(mutableListOf()),
+            store,
+        )
+        val pending = listOf(
+            pendingMedia("content://picker/a", mimeType = "image/png"),
+            pendingMedia("content://picker/b", mimeType = "video/mp4", type = MediaType.VIDEO),
+            pendingMedia("content://picker/c", mimeType = "image/webp"),
+        )
+
+        repository.sendMediaMessage(pending)
+
+        val message = requireNotNull(local.persistedMessage)
+        assertEquals(listOf(0, 1, 2), message.media.map(MessageMedia::position))
+        assertEquals(
+            listOf("content://picker/a", "content://picker/b", "content://picker/c"),
+            store.copied.map(CopiedOutgoingMedia::sourceUri),
+        )
+        assertEquals(3, message.media.map(MessageMedia::id).toSet().size)
+        assertTrue(message.media.none { item -> item.id == message.id })
+        assertEquals(
+            store.copied.map(CopiedOutgoingMedia::durableUri),
+            message.media.map(MessageMedia::localUri),
+        )
+        assertTrue(message.media.all { item -> item.uploadStatus == MediaUploadStatus.PENDING })
+        assertTrue(message.media.all { item -> item.storagePath == null })
+    }
+
+    @Test
+    fun sendMediaMessage_tenItems_accepted() = runBlocking {
+        val local = RecordingLocalDataSource(mutableListOf())
+        val store = RecordingOutgoingMediaStore(mutableListOf())
+        val repository = createRepository(
+            local,
+            RecordingRemoteDataSource(mutableListOf(), serverCreatedAt, serverUpdatedAt),
+            RecordingTextMessageSendScheduler(mutableListOf()),
+            store,
+        )
+
+        repository.sendMediaMessage(
+            List(10) { index -> pendingMedia("content://picker/$index") },
+        )
+
+        val message = requireNotNull(local.persistedMessage)
+        assertEquals(10, message.media.size)
+        assertEquals(10, store.copied.size)
+        assertEquals((0..9).toList(), message.media.map(MessageMedia::position))
+        assertEquals(10, message.media.map(MessageMedia::id).distinct().size)
+    }
+
+    @Test
+    fun sendMediaMessage_moreThanTenItems_rejectedWithoutCopyOrPersist() = runBlocking {
+        val events = mutableListOf<String>()
+        val local = RecordingLocalDataSource(events)
+        val store = RecordingOutgoingMediaStore(events)
+        val repository = createRepository(
+            local,
+            RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt),
+            RecordingTextMessageSendScheduler(events),
+            store,
+        )
+        var thrown: Throwable? = null
+
+        try {
+            repository.sendMediaMessage(
+                List(11) { index -> pendingMedia("content://picker/$index") },
+            )
+        } catch (exception: Throwable) {
+            thrown = exception
+        }
+
+        assertTrue(thrown is IllegalArgumentException)
+        assertEquals(0, local.upsertCount)
+        assertTrue(store.copied.isEmpty())
+        assertTrue(events.isEmpty())
+    }
+
+    @Test
+    fun sendMediaMessage_emptyList_rejectedWithoutCopyOrPersist() = runBlocking {
+        val local = RecordingLocalDataSource(mutableListOf())
+        val store = RecordingOutgoingMediaStore(mutableListOf())
+        val repository = createRepository(
+            local,
+            RecordingRemoteDataSource(mutableListOf(), serverCreatedAt, serverUpdatedAt),
+            RecordingTextMessageSendScheduler(mutableListOf()),
+            store,
+        )
+        var thrown: Throwable? = null
+
+        try {
+            repository.sendMediaMessage(emptyList())
+        } catch (exception: Throwable) {
+            thrown = exception
+        }
+
+        assertTrue(thrown is IllegalArgumentException)
+        assertEquals(0, local.upsertCount)
+        assertTrue(store.copied.isEmpty())
+    }
+
+    @Test
+    fun sendMediaMessage_copyFailure_deletesCopiedFilesAndDoesNotPersist() = runBlocking {
+        val events = mutableListOf<String>()
+        val local = RecordingLocalDataSource(events)
+        val store = RecordingOutgoingMediaStore(events, failOnCopyIndex = 1)
+        val repository = createRepository(
+            local,
+            RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt),
+            RecordingTextMessageSendScheduler(events),
+            store,
+        )
+        var thrown: Throwable? = null
+
+        try {
+            repository.sendMediaMessage(
+                listOf(
+                    pendingMedia("content://picker/a"),
+                    pendingMedia("content://picker/b"),
+                ),
+            )
+        } catch (exception: Throwable) {
+            thrown = exception
+        }
+
+        assertEquals("copy failed", thrown?.message)
+        assertEquals(0, local.upsertCount)
+        assertTrue(store.copied.isEmpty())
+        assertEquals(1, store.deletedMessageIds.size)
+        assertEquals(listOf(store.deletedMessageIds.single()), local.deletedMessageIds)
+        assertEquals(listOf("store:copy", "store:copy-fail", "store:delete", "local:delete"), events)
+    }
+
+    @Test
+    fun sendMediaMessage_persistFailure_deletesCopiedFilesAndMessageRow() = runBlocking {
+        val events = mutableListOf<String>()
+        val failure = IllegalStateException("room unavailable")
+        val local = RecordingLocalDataSource(events, upsertFailure = failure)
+        val store = RecordingOutgoingMediaStore(events)
+        val repository = createRepository(
+            local,
+            RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt),
+            RecordingTextMessageSendScheduler(events),
+            store,
+        )
+        var thrown: Throwable? = null
+
+        try {
+            repository.sendMediaMessage(listOf(pendingMedia("content://picker/a")))
+        } catch (exception: Throwable) {
+            thrown = exception
+        }
+
+        assertSame(failure, thrown)
+        assertEquals(1, local.upsertCount)
+        assertEquals(null, local.persistedMessage)
+        assertEquals(store.deletedMessageIds, local.deletedMessageIds)
+        assertTrue(store.copied.isEmpty())
+        assertEquals(listOf("store:copy", "local:SENDING", "store:delete", "local:delete"), events)
     }
 
     @Test
@@ -625,6 +827,7 @@ class DefaultChatRepositoryTest {
         localDataSource: ChatLocalDataSource,
         remoteDataSource: ChatRemoteDataSource,
         scheduler: TextMessageSendScheduler,
+        outgoingMediaStore: OutgoingMediaStore = RecordingOutgoingMediaStore(mutableListOf()),
     ): DefaultChatRepository =
         DefaultChatRepository(
             localDataSource = localDataSource,
@@ -633,6 +836,21 @@ class DefaultChatRepositoryTest {
                 override suspend fun getOrCreateUserId(): UUID = senderId
             },
             textMessageSendScheduler = scheduler,
+            outgoingMediaStore = outgoingMediaStore,
+        )
+
+    private fun pendingMedia(
+        uri: String,
+        mimeType: String = "image/jpeg",
+        type: MediaType = MediaType.IMAGE,
+    ): PendingMedia =
+        PendingMedia(
+            localUri = uri,
+            mediaType = type,
+            mimeType = mimeType,
+            sizeBytes = 12L,
+            width = 100,
+            height = 80,
         )
 
     private fun persistedTextMessage(
@@ -724,8 +942,51 @@ private data class ScheduledMessage(
     val reason: TextMessageScheduleReason,
 )
 
+private data class CopiedOutgoingMedia(
+    val sourceUri: String,
+    val messageId: UUID,
+    val mediaId: UUID,
+    val durableUri: String,
+)
+
+private class RecordingOutgoingMediaStore(
+    private val events: MutableList<String>,
+    private val failOnCopyIndex: Int? = null,
+) : OutgoingMediaStore {
+    val copied = mutableListOf<CopiedOutgoingMedia>()
+    val deletedMessageIds = mutableListOf<UUID>()
+
+    override fun copyIncoming(
+        sourceUri: String,
+        messageId: UUID,
+        mediaId: UUID,
+        mimeType: String,
+    ): String {
+        if (failOnCopyIndex != null && copied.size == failOnCopyIndex) {
+            events += "store:copy-fail"
+            throw IllegalStateException("copy failed")
+        }
+        val durableUri = "file:///outgoing-media/$messageId/$mediaId"
+        copied += CopiedOutgoingMedia(
+            sourceUri = sourceUri,
+            messageId = messageId,
+            mediaId = mediaId,
+            durableUri = durableUri,
+        )
+        events += "store:copy"
+        return durableUri
+    }
+
+    override fun deleteCopiedMedia(messageId: UUID) {
+        copied.removeAll { item -> item.messageId == messageId }
+        deletedMessageIds += messageId
+        events += "store:delete"
+    }
+}
+
 private class RecordingLocalDataSource(
     private val events: MutableList<String>,
+    private val upsertFailure: Exception? = null,
 ) : ChatLocalDataSource {
     var persistedMessage: Message? = null
     var currentMessage: Message? = null
@@ -735,6 +996,7 @@ private class RecordingLocalDataSource(
     val upsertedMessagePages = mutableListOf<List<Message>>()
     val upsertedUsers = mutableListOf<User>()
     val messagesById = mutableMapOf<UUID, Message>()
+    val deletedMessageIds = mutableListOf<UUID>()
     private val usersById = mutableMapOf<UUID, User>()
 
     override suspend fun upsertMessage(message: Message) {
@@ -743,6 +1005,19 @@ private class RecordingLocalDataSource(
         currentMessage = message
         sendAttemptCount = 0
         events += "local:${message.sendStatus}"
+        upsertFailure?.let { throw it }
+    }
+
+    override suspend fun deleteMessage(messageId: UUID) {
+        deletedMessageIds += messageId
+        if (persistedMessage?.id == messageId) {
+            persistedMessage = null
+        }
+        if (currentMessage?.id == messageId) {
+            currentMessage = null
+        }
+        messagesById.remove(messageId)
+        events += "local:delete"
     }
 
     fun seedMessage(message: Message, attemptCount: Int = 1) {
