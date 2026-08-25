@@ -43,12 +43,13 @@ Branch: `feature/text-messaging`. Repository code is authoritative; check `git s
 - `SupabaseChatRemoteDataSource` implements users, text insert, message queries, Realtime `messages` INSERT/UPDATE observation, media RPC/storage primitives, and DTO mapping.
 - `DefaultUserRepository` is local-first for lookup, caches remote users, and upserts remote then Room.
 - Profile Setup saves username plus optional positive integer age. Optional profile photo uses the system Photo Picker, local preview, then Storage upload of `{userId}/avatar.{ext}` into bucket `profile-images` before user upsert. Keyboard uses Scaffold `safeDrawing` only (no extra `imePadding`).
-- `DefaultChatRepository.loadLatestMessages` / `loadOlderMessages` fetch existing remote pages (`created_at DESC, id DESC`; older uses `created_at < cursor` OR same timestamp and `id < cursor`), mark messages `SENT`, upsert missing senders then messages/media into Room, and leave existing Room rows untouched when a fetch fails. Duplicate UUIDs are upserted by primary key. Chat UI still only observes Room.
+- `DefaultChatRepository.loadLatestMessages` / `loadOlderMessages` fetch existing remote pages (`created_at DESC, id DESC`; older uses `created_at < cursor` OR same timestamp and `id < cursor`), mark messages `SENT`, upsert missing senders then messages/media into Room, and leave existing Room rows untouched when a fetch fails. Duplicate UUIDs are upserted by primary key. `loadOlderMessages` takes the oldest Room `SENT` message as the remote cursor (not `SENDING`/`FAILED` locals), returns the remote page size so Chat can detect exhausted history, and returns `0` without a remote fetch when no `SENT` cursor exists. Chat UI still only observes Room.
 - `DefaultChatRepository.startRealtimeSync` subscribes to Supabase `messages` INSERT and UPDATE (not DELETE), resolves each event through `getMessage` plus grouped media, upserts missing senders, then writes into Room. New remote rows are upserted as `SENT`; an existing optimistic local row is reconciled to `SENT` with server timestamps without resetting send-attempt metadata. `stopRealtimeSync` cancels the in-flight collection. Subscription failures do not clear Room. Realtime is owned by `ChatViewModel` (`viewModelScope`); Compose does not subscribe to Supabase.
 
 ### Presentation
 
 - `ChatViewModel` observes Room messages unchanged, starts repository Realtime sync then loads the latest remote page at start, owns composer state, schedules sends, retries by existing UUID, exposes current user ID via `UserRepository`, and emits one-time errors.
+- Chat older-history pagination is presentation-only: `ChatAction.LoadOlderMessages` runs when the reversed list approaches the oldest Room message. The ViewModel calls `ChatRepository.loadOlderMessages` (cursor chosen in the data layer from the oldest `SENT` row), keeps `isLoadingOlder` / `hasMoreOlderMessages` in `ChatUiState`, and still only observes Room for the message list. A short/empty remote page (size `< 20`) marks history exhausted. A small spinner can appear at the oldest edge; it does not replace the thread.
 - `ChatRoute` collects state/events lifecycle-aware. `ChatScreen` has Material 3 app bar, empty state, message bubbles, composer, snackbar, Light/Dark previews, disabled-by-default attachment affordance, and `clearFocusOnTap()` on chat content.
 - Messages remain newest-to-oldest in state; `LazyColumn(reverseLayout = true)` puts the newest item at the visual bottom with UUID keys.
 - Outgoing bubbles show `SENDING`, `SENT`, or `FAILED`; failed messages retry through `ChatAction.RetryMessage`.
@@ -56,7 +57,6 @@ Branch: `feature/text-messaging`. Repository code is authoritative; check `git s
 
 ## Not Implemented
 
-- Chat UI older-page pagination triggers (`loadOlderMessages` is implemented in the repository only).
 - Media repository orchestration, media worker/retry flow, picker/permissions, upload UI, and media rendering (the send-work notification channel/progress helper is ready to reuse).
 - Incoming-message push / FCM, Supabase Auth, presence, typing indicators, and read receipts.
 

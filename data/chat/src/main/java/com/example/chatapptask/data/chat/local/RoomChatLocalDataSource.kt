@@ -123,6 +123,12 @@ class RoomChatLocalDataSource @Inject constructor(
     ): List<Message> =
         mapMessagesWithMedia(messageDao.getMessagesBySendStatuses(statuses))
 
+    override suspend fun getOldestMessageBySendStatus(status: MessageSendStatus): Message? {
+        val message = messageDao.getOldestMessageBySendStatus(status) ?: return null
+        val media = messageMediaDao.getMediaForMessage(message.id)
+        return message.toDomain(media)
+    }
+
     override suspend fun upsertMedia(media: MessageMedia) {
         messageMediaDao.upsertMedia(media.toEntity())
     }

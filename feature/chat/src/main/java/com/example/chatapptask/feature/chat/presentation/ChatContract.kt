@@ -8,6 +8,8 @@ data class ChatUiState(
     val currentUserId: UUID? = null,
     val composerText: String = "",
     val isSendRequestInProgress: Boolean = false,
+    val isLoadingOlder: Boolean = false,
+    val hasMoreOlderMessages: Boolean = true,
 )
 
 sealed interface ChatAction {
@@ -16,6 +18,8 @@ sealed interface ChatAction {
     data object SendText : ChatAction
 
     data class RetryMessage(val messageId: UUID) : ChatAction
+
+    data object LoadOlderMessages : ChatAction
 }
 
 sealed interface ChatEvent {

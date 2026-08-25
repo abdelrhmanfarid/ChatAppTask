@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -39,6 +40,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -134,6 +136,33 @@ fun ChatScreen(
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { contentPadding ->
+        val listState = rememberLazyListState()
+        val reachedOldestLoaded by remember(state.messages.size) {
+            derivedStateOf {
+                val lastVisibleIndex = listState.layoutInfo.visibleItemsInfo
+                    .maxOfOrNull { item -> item.index }
+                    ?: return@derivedStateOf false
+                val oldestMessageIndex = state.messages.lastIndex
+                oldestMessageIndex >= 0 && lastVisibleIndex >= oldestMessageIndex
+            }
+        }
+
+        LaunchedEffect(
+            reachedOldestLoaded,
+            state.hasMoreOlderMessages,
+            state.isLoadingOlder,
+            state.messages.size,
+        ) {
+            if (
+                reachedOldestLoaded &&
+                state.hasMoreOlderMessages &&
+                !state.isLoadingOlder &&
+                state.messages.isNotEmpty()
+            ) {
+                onAction(ChatAction.LoadOlderMessages)
+            }
+        }
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -145,6 +174,7 @@ fun ChatScreen(
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
+                    state = listState,
                     reverseLayout = true,
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -158,6 +188,13 @@ fun ChatScreen(
                             isOutgoing = state.currentUserId == message.senderId,
                             onRetry = { onAction(ChatAction.RetryMessage(message.id)) },
                         )
+                    }
+                    if (state.isLoadingOlder) {
+                        item(key = OLDER_LOADING_ITEM_KEY) {
+                            OlderMessagesLoadingIndicator(
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
                     }
                 }
             }
@@ -344,6 +381,22 @@ fun ChatComposer(
 }
 
 @Composable
+private fun OlderMessagesLoadingIndicator(modifier: Modifier = Modifier) {
+    val loadingDescription = stringResource(R.string.chat_loading_older)
+    Box(
+        modifier = modifier
+            .padding(vertical = 8.dp)
+            .semantics { contentDescription = loadingDescription },
+        contentAlignment = Alignment.Center,
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(20.dp),
+            strokeWidth = 2.dp,
+        )
+    }
+}
+
+@Composable
 private fun EmptyChatState(modifier: Modifier = Modifier) {
     Box(
         modifier = modifier.padding(32.dp),
@@ -368,6 +421,8 @@ private fun EmptyChatState(modifier: Modifier = Modifier) {
         }
     }
 }
+
+private const val OLDER_LOADING_ITEM_KEY = "older-messages-loading"
 
 private fun Instant.toDisplayTime(): String =
     DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)

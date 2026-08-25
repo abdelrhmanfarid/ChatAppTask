@@ -33,18 +33,16 @@ class DefaultChatRepository @Inject constructor(
         persistRemoteMessagePage(remoteDataSource.getLatestMessages(limit))
     }
 
-    override suspend fun loadOlderMessages(
-        oldestCreatedAt: Instant,
-        oldestMessageId: UUID,
-        limit: Int,
-    ) {
-        persistRemoteMessagePage(
-            remoteDataSource.getOlderMessages(
-                cursorCreatedAt = oldestCreatedAt,
-                cursorMessageId = oldestMessageId,
-                limit = limit,
-            ),
+    override suspend fun loadOlderMessages(limit: Int): Int {
+        val cursor = localDataSource.getOldestMessageBySendStatus(MessageSendStatus.SENT)
+            ?: return 0
+        val page = remoteDataSource.getOlderMessages(
+            cursorCreatedAt = cursor.createdAt,
+            cursorMessageId = cursor.id,
+            limit = limit,
         )
+        persistRemoteMessagePage(page)
+        return page.size
     }
 
     override suspend fun sendTextMessage(text: String) {

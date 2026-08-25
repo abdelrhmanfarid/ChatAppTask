@@ -8,6 +8,7 @@ import com.example.chatapptask.core.domain.repository.ChatRepository
 import com.example.chatapptask.core.domain.repository.UserRepository
 import java.time.Instant
 import java.util.UUID
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -123,15 +124,19 @@ class ChatViewModelTest {
             assertFalse(viewModel.uiState.value.isSendRequestInProgress)
         }
 
-    private fun message(id: String): Message =
+    private fun message(
+        id: String,
+        createdAt: String = "2026-08-23T12:00:00Z",
+        status: MessageSendStatus = MessageSendStatus.SENT,
+    ): Message =
         Message(
             id = UUID.fromString(id),
             senderId = UUID.fromString("33eed91f-846c-49c8-851d-bca519b01432"),
             textContent = "Message",
-            createdAt = Instant.parse("2026-08-23T12:00:00Z"),
-            updatedAt = Instant.parse("2026-08-23T12:00:00Z"),
+            createdAt = Instant.parse(createdAt),
+            updatedAt = Instant.parse(createdAt),
             media = emptyList(),
-            sendStatus = MessageSendStatus.SENT,
+            sendStatus = status,
         )
 
     @Test
@@ -202,6 +207,169 @@ class ChatViewModelTest {
         assertEquals(1, repository.loadLatestCount)
         assertEquals(listOf(existing), viewModel.uiState.value.messages)
     }
+
+    @Test
+    fun loadOlderMessages_delegatesToRepositoryWhenSentMessagesExist() = runTest(dispatcher) {
+        val olderSent = message(
+            id = "00000000-0000-0000-0000-000000000001",
+            createdAt = "2026-08-23T11:00:00Z",
+        )
+        val newerSent = message(
+            id = "00000000-0000-0000-0000-000000000002",
+            createdAt = "2026-08-23T12:00:00Z",
+        )
+        val repository = FakeChatRepository().apply {
+            messages.value = listOf(newerSent, olderSent)
+        }
+        val viewModel = ChatViewModel(repository, FakeUserRepository())
+        advanceUntilIdle()
+
+        viewModel.onAction(ChatAction.LoadOlderMessages)
+        advanceUntilIdle()
+
+        assertEquals(1, repository.olderLoadCount)
+        assertFalse(viewModel.uiState.value.isLoadingOlder)
+        assertEquals(listOf(newerSent, olderSent), viewModel.uiState.value.messages)
+    }
+
+    @Test
+    fun loadOlderMessages_stillLoadsWhenOldestObservedRowIsFailed() = runTest(dispatcher) {
+        val failedOlder = message(
+            id = "00000000-0000-0000-0000-000000000050",
+            createdAt = "2026-08-23T10:50:00Z",
+            status = MessageSendStatus.FAILED,
+        )
+        val oldestSent = message(
+            id = "00000000-0000-0000-0000-000000000081",
+            createdAt = "2026-08-23T12:00:00Z",
+        )
+        val repository = FakeChatRepository().apply {
+            messages.value = listOf(oldestSent, failedOlder)
+        }
+        val viewModel = ChatViewModel(repository, FakeUserRepository())
+        advanceUntilIdle()
+
+        viewModel.onAction(ChatAction.LoadOlderMessages)
+        advanceUntilIdle()
+
+        assertEquals(1, repository.olderLoadCount)
+    }
+
+    @Test
+    fun loadOlderMessages_ignoredWhenMessagesAreEmpty() = runTest(dispatcher) {
+        val repository = FakeChatRepository()
+        val viewModel = ChatViewModel(repository, FakeUserRepository())
+        advanceUntilIdle()
+
+        viewModel.onAction(ChatAction.LoadOlderMessages)
+        advanceUntilIdle()
+
+        assertEquals(0, repository.olderLoadCount)
+    }
+
+    @Test
+    fun loadOlderMessages_ignoredWhenOnlyFailedMessagesExist() = runTest(dispatcher) {
+        val failed = message(
+            id = "00000000-0000-0000-0000-000000000050",
+            createdAt = "2026-08-23T10:50:00Z",
+            status = MessageSendStatus.FAILED,
+        )
+        val repository = FakeChatRepository().apply {
+            messages.value = listOf(failed)
+        }
+        val viewModel = ChatViewModel(repository, FakeUserRepository())
+        advanceUntilIdle()
+
+        viewModel.onAction(ChatAction.LoadOlderMessages)
+        advanceUntilIdle()
+
+        assertEquals(0, repository.olderLoadCount)
+        assertTrue(viewModel.uiState.value.hasMoreOlderMessages)
+        assertFalse(viewModel.uiState.value.isLoadingOlder)
+    }
+
+    @Test
+    fun loadOlderMessages_ignoresConcurrentRequestsWhileLoading() = runTest(dispatcher) {
+        val existing = message("00000000-0000-0000-0000-000000000001")
+        val repository = FakeChatRepository().apply {
+            messages.value = listOf(existing)
+            olderGate = CompletableDeferred()
+        }
+        val viewModel = ChatViewModel(repository, FakeUserRepository())
+        advanceUntilIdle()
+
+        viewModel.onAction(ChatAction.LoadOlderMessages)
+        dispatcher.scheduler.runCurrent()
+        viewModel.onAction(ChatAction.LoadOlderMessages)
+
+        assertEquals(1, repository.olderLoadCount)
+        assertTrue(viewModel.uiState.value.isLoadingOlder)
+
+        repository.olderGate!!.complete(Unit)
+        advanceUntilIdle()
+
+        assertFalse(viewModel.uiState.value.isLoadingOlder)
+        assertEquals(1, repository.olderLoadCount)
+    }
+
+    @Test
+    fun loadOlderMessages_shortPageMarksHistoryExhausted() = runTest(dispatcher) {
+        val existing = message("00000000-0000-0000-0000-000000000001")
+        val repository = FakeChatRepository().apply {
+            messages.value = listOf(existing)
+            olderPageSize = 7
+        }
+        val viewModel = ChatViewModel(repository, FakeUserRepository())
+        advanceUntilIdle()
+
+        viewModel.onAction(ChatAction.LoadOlderMessages)
+        advanceUntilIdle()
+        viewModel.onAction(ChatAction.LoadOlderMessages)
+        advanceUntilIdle()
+
+        assertEquals(1, repository.olderLoadCount)
+        assertFalse(viewModel.uiState.value.hasMoreOlderMessages)
+        assertFalse(viewModel.uiState.value.isLoadingOlder)
+    }
+
+    @Test
+    fun loadOlderMessages_fullPageKeepsHasMoreOlderMessages() = runTest(dispatcher) {
+        val existing = message("00000000-0000-0000-0000-000000000001")
+        val repository = FakeChatRepository().apply {
+            messages.value = listOf(existing)
+            olderPageSize = 20
+        }
+        val viewModel = ChatViewModel(repository, FakeUserRepository())
+        advanceUntilIdle()
+
+        viewModel.onAction(ChatAction.LoadOlderMessages)
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.hasMoreOlderMessages)
+        assertFalse(viewModel.uiState.value.isLoadingOlder)
+    }
+
+    @Test
+    fun loadOlderMessages_failureEmitsErrorAndAllowsRetry() = runTest(dispatcher) {
+        val existing = message("00000000-0000-0000-0000-000000000001")
+        val repository = FakeChatRepository().apply {
+            messages.value = listOf(existing)
+            olderFailure = IllegalStateException("older page unavailable")
+        }
+        val viewModel = ChatViewModel(repository, FakeUserRepository())
+        advanceUntilIdle()
+
+        viewModel.onAction(ChatAction.LoadOlderMessages)
+        advanceUntilIdle()
+
+        assertEquals(
+            ChatEvent.ShowError("older page unavailable"),
+            viewModel.events.first(),
+        )
+        assertTrue(viewModel.uiState.value.hasMoreOlderMessages)
+        assertFalse(viewModel.uiState.value.isLoadingOlder)
+        assertEquals(listOf(existing), viewModel.uiState.value.messages)
+    }
 }
 
 private class FakeChatRepository : ChatRepository {
@@ -213,6 +381,10 @@ private class FakeChatRepository : ChatRepository {
     var loadLatestFailure: Exception? = null
     var startRealtimeCount = 0
     var startRealtimeFailure: Exception? = null
+    var olderLoadCount = 0
+    var olderPageSize = 0
+    var olderFailure: Exception? = null
+    var olderGate: CompletableDeferred<Unit>? = null
 
     override fun observeMessages(): Flow<List<Message>> = messages
 
@@ -231,11 +403,12 @@ private class FakeChatRepository : ChatRepository {
         loadLatestCount += 1
         loadLatestFailure?.let { throw it }
     }
-    override suspend fun loadOlderMessages(
-        oldestCreatedAt: Instant,
-        oldestMessageId: UUID,
-        limit: Int,
-    ) = unused()
+    override suspend fun loadOlderMessages(limit: Int): Int {
+        olderLoadCount += 1
+        olderGate?.await()
+        olderFailure?.let { throw it }
+        return olderPageSize
+    }
     override suspend fun sendMediaMessage(media: List<PendingMedia>, text: String?) = unused()
     override suspend fun retryMediaItem(messageId: UUID, mediaId: UUID) = unused()
     override suspend fun startRealtimeSync() {

@@ -102,4 +102,14 @@ interface MessageDao {
     suspend fun getMessagesBySendStatuses(
         statuses: List<MessageSendStatus>,
     ): List<MessageEntity>
+
+    @Query(
+        """
+        SELECT * FROM messages
+        WHERE send_status = :status
+        ORDER BY created_at ASC, id ASC
+        LIMIT 1
+        """,
+    )
+    suspend fun getOldestMessageBySendStatus(status: MessageSendStatus): MessageEntity?
 }

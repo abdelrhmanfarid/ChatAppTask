@@ -2,6 +2,7 @@ package com.example.chatapptask.feature.chat.presentation
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.chatapptask.core.domain.model.MessageSendStatus
 import com.example.chatapptask.core.domain.repository.ChatRepository
 import com.example.chatapptask.core.domain.repository.UserRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -74,6 +75,38 @@ class ChatViewModel @Inject constructor(
 
             ChatAction.SendText -> sendText()
             is ChatAction.RetryMessage -> retryMessage(action.messageId)
+            ChatAction.LoadOlderMessages -> loadOlderMessages()
+        }
+    }
+
+    private fun loadOlderMessages() {
+        var shouldLoad = false
+        _uiState.update { state ->
+            if (state.isLoadingOlder || !state.hasMoreOlderMessages) return@update state
+            if (state.messages.none { message -> message.sendStatus == MessageSendStatus.SENT }) {
+                return@update state
+            }
+            shouldLoad = true
+            state.copy(isLoadingOlder = true)
+        }
+        if (!shouldLoad) return
+
+        viewModelScope.launch {
+            try {
+                val pageSize = chatRepository.loadOlderMessages(limit = OLDER_PAGE_SIZE)
+                _uiState.update { state ->
+                    state.copy(
+                        isLoadingOlder = false,
+                        hasMoreOlderMessages = pageSize >= OLDER_PAGE_SIZE,
+                    )
+                }
+            } catch (exception: Exception) {
+                if (exception is kotlinx.coroutines.CancellationException) throw exception
+                _uiState.update { state -> state.copy(isLoadingOlder = false) }
+                eventChannel.send(
+                    ChatEvent.ShowError(exception.message ?: LOAD_OLDER_ERROR_MESSAGE),
+                )
+            }
         }
     }
 
@@ -117,6 +150,8 @@ class ChatViewModel @Inject constructor(
         const val RETRY_ERROR_MESSAGE = "Unable to schedule the retry."
         const val IDENTITY_ERROR_MESSAGE = "Unable to identify the current user."
         const val LOAD_ERROR_MESSAGE = "Unable to load messages."
+        const val LOAD_OLDER_ERROR_MESSAGE = "Unable to load older messages."
         const val REALTIME_ERROR_MESSAGE = "Unable to start live message updates."
+        const val OLDER_PAGE_SIZE = 20
     }
 }

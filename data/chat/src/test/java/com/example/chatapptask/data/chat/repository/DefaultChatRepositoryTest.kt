@@ -276,13 +276,30 @@ class DefaultChatRepositoryTest {
     }
 
     @Test
-    fun loadOlderMessages_passesCursorAndPersistsRemotePage() = runBlocking {
+    fun loadOlderMessages_usesOldestSentMessageAsCursor() = runBlocking {
         val events = mutableListOf<String>()
-        val cursorCreatedAt = Instant.parse("2026-08-23T12:00:00Z")
-        val cursorMessageId = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1")
+        val oldestSentId = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1")
+        val newestSentId = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2")
         val olderMessageId = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa0")
+        val oldestSentCreatedAt = Instant.parse("2026-08-23T12:00:00Z")
         val sender = remoteUser(senderId)
-        val local = RecordingLocalDataSource(events).apply { seedUser(sender) }
+        val local = RecordingLocalDataSource(events).apply {
+            seedUser(sender)
+            seedMessage(
+                persistedTextMessage(
+                    messageId = newestSentId,
+                    status = MessageSendStatus.SENT,
+                    createdAt = Instant.parse("2026-08-23T12:01:00Z"),
+                ),
+            )
+            seedMessage(
+                persistedTextMessage(
+                    messageId = oldestSentId,
+                    status = MessageSendStatus.SENT,
+                    createdAt = oldestSentCreatedAt,
+                ),
+            )
+        }
         val remote = RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt).apply {
             olderMessages = listOf(
                 remoteMessage(
@@ -296,21 +313,94 @@ class DefaultChatRepositoryTest {
         }
         val repository = createRepository(local, remote, RecordingTextMessageSendScheduler(events))
 
-        repository.loadOlderMessages(
-            oldestCreatedAt = cursorCreatedAt,
-            oldestMessageId = cursorMessageId,
-            limit = 10,
-        )
+        val pageSize = repository.loadOlderMessages(limit = 10)
 
-        assertEquals(cursorCreatedAt, remote.olderCursorCreatedAt)
-        assertEquals(cursorMessageId, remote.olderCursorMessageId)
+        assertEquals(oldestSentCreatedAt, remote.olderCursorCreatedAt)
+        assertEquals(oldestSentId, remote.olderCursorMessageId)
         assertEquals(10, remote.olderLimit)
+        assertEquals(1, pageSize)
         assertTrue(remote.requestedUserIds.isEmpty())
         assertEquals(listOf(olderMessageId), local.upsertedMessagePages.single().map(Message::id))
         assertEquals(
             listOf("remote:older", "local:upsertMessages"),
             events,
         )
+    }
+
+    @Test
+    fun loadOlderMessages_doesNotUseOlderLocalFailedMessageAsCursor() = runBlocking {
+        val events = mutableListOf<String>()
+        val loadedOldestSentId = UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb81")
+        val failedLocalId = UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb50")
+        val skippedRangeMessageId = UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb70")
+        val loadedOldestSentAt = Instant.parse("2026-08-23T12:00:00Z")
+        val sender = remoteUser(senderId)
+        val local = RecordingLocalDataSource(events).apply {
+            seedUser(sender)
+            seedMessage(
+                persistedTextMessage(
+                    messageId = loadedOldestSentId,
+                    status = MessageSendStatus.SENT,
+                    createdAt = loadedOldestSentAt,
+                ),
+            )
+            seedMessage(
+                persistedTextMessage(
+                    messageId = failedLocalId,
+                    status = MessageSendStatus.FAILED,
+                    createdAt = Instant.parse("2026-08-23T11:50:00Z"),
+                ),
+            )
+        }
+        val remote = RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt).apply {
+            olderMessages = listOf(
+                remoteMessage(
+                    id = skippedRangeMessageId,
+                    senderId = senderId,
+                    text = "Between failed local and loaded page",
+                    status = MessageSendStatus.SENT,
+                    createdAt = Instant.parse("2026-08-23T11:40:00Z"),
+                ),
+            )
+        }
+        val repository = createRepository(local, remote, RecordingTextMessageSendScheduler(events))
+
+        repository.loadOlderMessages(limit = 20)
+
+        assertEquals(loadedOldestSentAt, remote.olderCursorCreatedAt)
+        assertEquals(loadedOldestSentId, remote.olderCursorMessageId)
+        assertEquals(
+            listOf(skippedRangeMessageId),
+            local.upsertedMessagePages.single().map(Message::id),
+        )
+    }
+
+    @Test
+    fun loadOlderMessages_emptyRemotePageReturnsZero() = runBlocking {
+        val events = mutableListOf<String>()
+        val sentId = UUID.fromString("cccccccc-cccc-cccc-cccc-cccccccccccc")
+        val sentAt = Instant.parse("2026-08-23T12:00:00Z")
+        val local = RecordingLocalDataSource(events).apply {
+            seedMessage(
+                persistedTextMessage(
+                    messageId = sentId,
+                    status = MessageSendStatus.SENT,
+                    createdAt = sentAt,
+                ),
+            )
+        }
+        val remote = RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt).apply {
+            olderMessages = emptyList()
+        }
+        val repository = createRepository(local, remote, RecordingTextMessageSendScheduler(events))
+
+        val pageSize = repository.loadOlderMessages(limit = 20)
+
+        assertEquals(0, pageSize)
+        assertEquals(sentAt, remote.olderCursorCreatedAt)
+        assertEquals(sentId, remote.olderCursorMessageId)
+        assertTrue(local.upsertedMessagePages.isEmpty())
+        assertEquals(listOf("remote:older"), events)
     }
 
     @Test
@@ -545,13 +635,17 @@ class DefaultChatRepositoryTest {
             textMessageSendScheduler = scheduler,
         )
 
-    private fun persistedTextMessage(messageId: UUID, status: MessageSendStatus): Message =
+    private fun persistedTextMessage(
+        messageId: UUID,
+        status: MessageSendStatus,
+        createdAt: Instant = Instant.parse("2026-08-23T12:00:00Z"),
+    ): Message =
         Message(
             id = messageId,
             senderId = senderId,
             textContent = "Existing message",
-            createdAt = Instant.parse("2026-08-23T12:00:00Z"),
-            updatedAt = Instant.parse("2026-08-23T12:00:00Z"),
+            createdAt = createdAt,
+            updatedAt = createdAt,
             media = emptyList(),
             sendStatus = status,
         )
@@ -712,6 +806,11 @@ private class RecordingLocalDataSource(
     ): List<Message> = unused()
     override suspend fun getMessagesByStatuses(statuses: List<MessageSendStatus>): List<Message> =
         unused()
+
+    override suspend fun getOldestMessageBySendStatus(status: MessageSendStatus): Message? =
+        messagesById.values
+            .filter { message -> message.sendStatus == status }
+            .minWithOrNull(compareBy<Message> { message -> message.createdAt }.thenBy { message -> message.id })
     override suspend fun upsertMedia(media: MessageMedia) = unused()
     override suspend fun upsertMedia(items: List<MessageMedia>) = unused()
     override suspend fun getMediaForMessage(messageId: UUID): List<MessageMedia> = unused()

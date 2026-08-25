@@ -48,6 +48,8 @@ interface ChatLocalDataSource {
         statuses: List<MessageSendStatus>,
     ): List<Message>
 
+    suspend fun getOldestMessageBySendStatus(status: MessageSendStatus): Message?
+
     suspend fun upsertMedia(media: MessageMedia)
 
     suspend fun upsertMedia(items: List<MessageMedia>)
