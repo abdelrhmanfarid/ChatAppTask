@@ -39,14 +39,15 @@ Branch: `feature/text-messaging`. Repository code is authoritative; check `git s
 
 - Supabase Kotlin 3.6.0 uses Ktor OkHttp 3.5.1 with PostgREST, Storage, and Realtime plugins installed.
 - Debug builds install Ktor `Logging` at `HEADERS` level under Logcat tag `SupabaseHttp`; credential headers are redacted and bodies are not logged. Release uses a no-op and has no logging dependency.
-- `SupabaseChatRemoteDataSource` implements users, text insert, message queries, media RPC/storage primitives, and DTO mapping.
+- `SupabaseChatRemoteDataSource` implements users, text insert, message queries, Realtime `messages` INSERT/UPDATE observation, media RPC/storage primitives, and DTO mapping.
 - `DefaultUserRepository` is local-first for lookup, caches remote users, and upserts remote then Room.
 - Profile Setup saves username plus optional positive integer age. Optional profile photo uses the system Photo Picker, local preview, then Storage upload of `{userId}/avatar.{ext}` into bucket `profile-images` before user upsert. Keyboard uses Scaffold `safeDrawing` only (no extra `imePadding`).
 - `DefaultChatRepository.loadLatestMessages` / `loadOlderMessages` fetch existing remote pages (`created_at DESC, id DESC`; older uses `created_at < cursor` OR same timestamp and `id < cursor`), mark messages `SENT`, upsert missing senders then messages/media into Room, and leave existing Room rows untouched when a fetch fails. Duplicate UUIDs are upserted by primary key. Chat UI still only observes Room.
+- `DefaultChatRepository.startRealtimeSync` subscribes to Supabase `messages` INSERT and UPDATE (not DELETE), resolves each event through `getMessage` plus grouped media, upserts missing senders, then writes into Room. New remote rows are upserted as `SENT`; an existing optimistic local row is reconciled to `SENT` with server timestamps without resetting send-attempt metadata. `stopRealtimeSync` cancels the in-flight collection. Subscription failures do not clear Room. Realtime is owned by `ChatViewModel` (`viewModelScope`); Compose does not subscribe to Supabase.
 
 ### Presentation
 
-- `ChatViewModel` observes Room messages unchanged, loads the latest remote page once at start, owns composer state, schedules sends, retries by existing UUID, exposes current user ID via `UserRepository`, and emits one-time errors.
+- `ChatViewModel` observes Room messages unchanged, starts repository Realtime sync then loads the latest remote page at start, owns composer state, schedules sends, retries by existing UUID, exposes current user ID via `UserRepository`, and emits one-time errors.
 - `ChatRoute` collects state/events lifecycle-aware. `ChatScreen` has Material 3 app bar, empty state, message bubbles, composer, snackbar, Light/Dark previews, disabled-by-default attachment affordance, and `clearFocusOnTap()` on chat content.
 - Messages remain newest-to-oldest in state; `LazyColumn(reverseLayout = true)` puts the newest item at the visual bottom with UUID keys.
 - Outgoing bubbles show `SENDING`, `SENT`, or `FAILED`; failed messages retry through `ChatAction.RetryMessage`.
@@ -55,7 +56,6 @@ Branch: `feature/text-messaging`. Repository code is authoritative; check `git s
 ## Not Implemented
 
 - Chat UI older-page pagination triggers (`loadOlderMessages` is implemented in the repository only).
-- Realtime synchronization (`startRealtimeSync`/`stopRealtimeSync` are unsupported); installing the plugin alone does not sync data.
 - Media repository orchestration, media worker/retry flow, picker/permissions, upload UI, and media rendering.
 - Supabase Auth, FCM, presence, typing indicators, and read receipts.
 

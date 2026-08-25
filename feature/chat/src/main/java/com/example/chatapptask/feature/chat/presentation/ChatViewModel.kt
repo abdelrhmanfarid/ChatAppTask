@@ -46,6 +46,17 @@ class ChatViewModel @Inject constructor(
 
         viewModelScope.launch {
             try {
+                chatRepository.startRealtimeSync()
+            } catch (exception: Exception) {
+                if (exception is kotlinx.coroutines.CancellationException) throw exception
+                eventChannel.send(
+                    ChatEvent.ShowError(exception.message ?: REALTIME_ERROR_MESSAGE),
+                )
+            }
+        }
+
+        viewModelScope.launch {
+            try {
                 chatRepository.loadLatestMessages()
             } catch (exception: Exception) {
                 eventChannel.send(
@@ -106,5 +117,6 @@ class ChatViewModel @Inject constructor(
         const val RETRY_ERROR_MESSAGE = "Unable to schedule the retry."
         const val IDENTITY_ERROR_MESSAGE = "Unable to identify the current user."
         const val LOAD_ERROR_MESSAGE = "Unable to load messages."
+        const val REALTIME_ERROR_MESSAGE = "Unable to start live message updates."
     }
 }

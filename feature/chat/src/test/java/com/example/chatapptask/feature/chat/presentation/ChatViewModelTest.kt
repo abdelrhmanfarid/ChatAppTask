@@ -172,6 +172,36 @@ class ChatViewModelTest {
         )
         assertEquals(listOf(existing), viewModel.uiState.value.messages)
     }
+
+    @Test
+    fun start_startsRealtimeThenLoadsLatest() = runTest(dispatcher) {
+        val repository = FakeChatRepository()
+        ChatViewModel(repository, FakeUserRepository())
+
+        advanceUntilIdle()
+
+        assertEquals(1, repository.startRealtimeCount)
+        assertEquals(1, repository.loadLatestCount)
+    }
+
+    @Test
+    fun realtimeStartFailure_stillLoadsLatestAndKeepsMessages() = runTest(dispatcher) {
+        val existing = message("00000000-0000-0000-0000-000000000001")
+        val repository = FakeChatRepository().apply {
+            messages.value = listOf(existing)
+            startRealtimeFailure = IllegalStateException("realtime unavailable")
+        }
+        val viewModel = ChatViewModel(repository, FakeUserRepository())
+
+        advanceUntilIdle()
+
+        assertEquals(
+            ChatEvent.ShowError("realtime unavailable"),
+            viewModel.events.first(),
+        )
+        assertEquals(1, repository.loadLatestCount)
+        assertEquals(listOf(existing), viewModel.uiState.value.messages)
+    }
 }
 
 private class FakeChatRepository : ChatRepository {
@@ -181,6 +211,8 @@ private class FakeChatRepository : ChatRepository {
     var sendFailure: Exception? = null
     var loadLatestCount = 0
     var loadLatestFailure: Exception? = null
+    var startRealtimeCount = 0
+    var startRealtimeFailure: Exception? = null
 
     override fun observeMessages(): Flow<List<Message>> = messages
 
@@ -204,7 +236,10 @@ private class FakeChatRepository : ChatRepository {
     ) = unused()
     override suspend fun sendMediaMessage(media: List<PendingMedia>, text: String?) = unused()
     override suspend fun retryMediaItem(messageId: UUID, mediaId: UUID) = unused()
-    override suspend fun startRealtimeSync() = unused()
+    override suspend fun startRealtimeSync() {
+        startRealtimeCount += 1
+        startRealtimeFailure?.let { throw it }
+    }
     override suspend fun stopRealtimeSync() = unused()
 }
 

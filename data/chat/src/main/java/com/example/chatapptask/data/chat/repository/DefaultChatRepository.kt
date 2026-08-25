@@ -12,7 +12,11 @@ import com.example.chatapptask.data.chat.worker.TextMessageScheduleReason
 import java.time.Instant
 import java.util.UUID
 import javax.inject.Inject
+import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class DefaultChatRepository @Inject constructor(
     private val localDataSource: ChatLocalDataSource,
@@ -20,6 +24,9 @@ class DefaultChatRepository @Inject constructor(
     private val userIdentityStore: UserIdentityStore,
     private val textMessageSendScheduler: TextMessageSendScheduler,
 ) : ChatRepository {
+    private val realtimeMutex = Mutex()
+    private var realtimeJob: Job? = null
+
     override fun observeMessages(): Flow<List<Message>> = localDataSource.observeMessages()
 
     override suspend fun loadLatestMessages(limit: Int) {
@@ -125,9 +132,57 @@ class DefaultChatRepository @Inject constructor(
         mediaId: UUID,
     ) = unsupported("retryMediaItem")
 
-    override suspend fun startRealtimeSync() = unsupported("startRealtimeSync")
+    override suspend fun startRealtimeSync() {
+        realtimeMutex.withLock {
+            if (realtimeJob?.isActive == true) return
+            realtimeJob = coroutineContext[Job]
+        }
+        try {
+            remoteDataSource.observeRemoteMessageIds().collect { messageId ->
+                try {
+                    ingestRemoteMessage(messageId)
+                } catch (_: Exception) {
+                    // Keep the subscription alive; Room is left unchanged.
+                }
+            }
+        } finally {
+            realtimeMutex.withLock {
+                if (realtimeJob === coroutineContext[Job]) {
+                    realtimeJob = null
+                }
+            }
+        }
+    }
 
-    override suspend fun stopRealtimeSync() = unsupported("stopRealtimeSync")
+    override suspend fun stopRealtimeSync() {
+        realtimeMutex.withLock {
+            realtimeJob?.cancel()
+            realtimeJob = null
+        }
+    }
+
+    private suspend fun ingestRemoteMessage(messageId: UUID) {
+        val remoteMessage = remoteDataSource.getMessage(messageId) ?: return
+        persistIncomingRemoteMessage(remoteMessage)
+    }
+
+    private suspend fun persistIncomingRemoteMessage(message: Message) {
+        val sentMessage = message.copy(sendStatus = MessageSendStatus.SENT)
+        val existing = localDataSource.getMessageById(sentMessage.id)
+        if (existing == null) {
+            persistRemoteMessagePage(listOf(sentMessage))
+            return
+        }
+        persistSenders(listOf(sentMessage))
+        if (sentMessage.media.isNotEmpty()) {
+            localDataSource.upsertMedia(sentMessage.media)
+        }
+        localDataSource.reconcileSentMessage(
+            messageId = sentMessage.id,
+            createdAt = sentMessage.createdAt,
+            updatedAt = sentMessage.updatedAt,
+        )
+    }
 
     private suspend fun persistRemoteMessagePage(messages: List<Message>) {
         if (messages.isEmpty()) return

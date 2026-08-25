@@ -16,11 +16,19 @@ import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Order
 import io.github.jan.supabase.postgrest.rpc
+import io.github.jan.supabase.realtime.PostgresAction
+import io.github.jan.supabase.realtime.channel
+import io.github.jan.supabase.realtime.decodeRecord
+import io.github.jan.supabase.realtime.postgresChangeFlow
 import io.github.jan.supabase.storage.storage
 import io.ktor.http.ContentType
 import java.time.Instant
 import java.util.UUID
 import javax.inject.Inject
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.launch
 
 class SupabaseChatRemoteDataSource @Inject constructor(
     private val supabaseClient: SupabaseClient,
@@ -45,6 +53,40 @@ class SupabaseChatRemoteDataSource @Inject constructor(
             }
             .decodeSingleOrNull<UserDto>()
             ?.toDomain()
+
+    override suspend fun getMessage(messageId: UUID): Message? {
+        val message = supabaseClient
+            .from(MESSAGES_TABLE)
+            .select {
+                filter {
+                    eq("id", messageId.toString())
+                }
+                limit(1)
+            }
+            .decodeSingleOrNull<MessageDto>()
+            ?: return null
+        val media = getMediaForMessages(listOf(messageId))
+        return message.toDomain(media)
+    }
+
+    override fun observeRemoteMessageIds(): Flow<UUID> = channelFlow {
+        val channel = supabaseClient.channel(MESSAGES_REALTIME_CHANNEL)
+        val changes = channel.postgresChangeFlow<PostgresAction>(schema = PUBLIC_SCHEMA) {
+            table = MESSAGES_TABLE
+        }
+        val collector = launch {
+            changes.collect { action ->
+                messageIdOf(action)?.let { send(it) }
+            }
+        }
+        try {
+            channel.subscribe(blockUntilSubscribed = true)
+            awaitCancellation()
+        } finally {
+            collector.cancel()
+            runCatching { channel.unsubscribe() }
+        }
+    }
 
     override suspend fun getLatestMessages(limit: Int): List<Message> {
         requirePositiveLimit(limit)
@@ -171,21 +213,6 @@ class SupabaseChatRemoteDataSource @Inject constructor(
         supabaseClient.storage[CHAT_MEDIA_BUCKET].delete(validateChatMediaPath(storagePath))
     }
 
-    private suspend fun getMessage(messageId: UUID): Message? {
-        val message = supabaseClient
-            .from(MESSAGES_TABLE)
-            .select {
-                filter {
-                    eq("id", messageId.toString())
-                }
-                limit(1)
-            }
-            .decodeSingleOrNull<MessageDto>()
-            ?: return null
-        val media = getMediaForMessages(listOf(messageId))
-        return message.toDomain(media)
-    }
-
     private suspend fun mapMessagesWithMedia(messages: List<MessageDto>): List<Message> {
         if (messages.isEmpty()) return emptyList()
 
@@ -238,6 +265,18 @@ class SupabaseChatRemoteDataSource @Inject constructor(
         return normalized
     }
 
+    private fun messageIdOf(action: PostgresAction): UUID? =
+        try {
+            val dto = when (action) {
+                is PostgresAction.Insert -> action.decodeRecord<MessageDto>()
+                is PostgresAction.Update -> action.decodeRecord<MessageDto>()
+                is PostgresAction.Delete, is PostgresAction.Select -> return null
+            }
+            UUID.fromString(dto.id)
+        } catch (_: Exception) {
+            null
+        }
+
     private fun String.toUuidOrThrow(message: String): UUID =
         try {
             UUID.fromString(this)
@@ -249,6 +288,8 @@ class SupabaseChatRemoteDataSource @Inject constructor(
         const val USERS_TABLE = "users"
         const val MESSAGES_TABLE = "messages"
         const val MESSAGE_MEDIA_TABLE = "message_media"
+        const val MESSAGES_REALTIME_CHANNEL = "public:messages"
+        const val PUBLIC_SCHEMA = "public"
         const val CREATE_MEDIA_MESSAGE_RPC = "create_media_message"
         const val CHAT_MEDIA_BUCKET = "chat-media"
         const val PROFILE_IMAGES_BUCKET = "profile-images"

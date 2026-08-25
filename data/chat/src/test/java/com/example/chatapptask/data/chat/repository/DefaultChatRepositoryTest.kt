@@ -14,8 +14,11 @@ import com.example.chatapptask.data.chat.worker.TextMessageScheduleReason
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -327,6 +330,137 @@ class DefaultChatRepositoryTest {
     }
 
     @Test
+    fun startRealtimeSync_persistsCompleteRemoteMessageAndSender() = runBlocking {
+        val events = mutableListOf<String>()
+        val messageId = UUID.fromString("55555555-5555-5555-5555-555555555555")
+        val sender = remoteUser(senderId)
+        val local = RecordingLocalDataSource(events)
+        val remote = RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt).apply {
+            usersById[sender.id] = sender
+            completeMessagesById[messageId] = remoteMessage(
+                id = messageId,
+                senderId = senderId,
+                text = "From another device",
+                status = MessageSendStatus.SENDING,
+            )
+        }
+        val repository = createRepository(local, remote, RecordingTextMessageSendScheduler(events))
+        val syncJob = launch { repository.startRealtimeSync() }
+        yield()
+
+        remote.emitRemoteMessageId(messageId)
+        yield()
+
+        repository.stopRealtimeSync()
+        syncJob.join()
+
+        assertEquals(listOf(messageId), remote.emittedMessageLookups)
+        assertEquals(listOf(sender), local.upsertedUsers)
+        val persisted = local.upsertedMessagePages.single().single()
+        assertEquals(messageId, persisted.id)
+        assertEquals(MessageSendStatus.SENT, persisted.sendStatus)
+        assertEquals(
+            listOf("remote:getMessage", "remote:getUser", "local:upsertUsers", "local:upsertMessages"),
+            events,
+        )
+    }
+
+    @Test
+    fun startRealtimeSync_existingOptimisticUuid_reconcilesSentWithoutResettingAttempts() =
+        runBlocking {
+            val events = mutableListOf<String>()
+            val messageId = UUID.fromString("66666666-6666-6666-6666-666666666666")
+            val sender = remoteUser(senderId)
+            val local = RecordingLocalDataSource(events).apply {
+                seedUser(sender)
+                seedMessage(
+                    persistedTextMessage(messageId, MessageSendStatus.SENDING),
+                    attemptCount = 2,
+                )
+            }
+            val remote = RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt).apply {
+                completeMessagesById[messageId] = remoteMessage(
+                    id = messageId,
+                    senderId = senderId,
+                    text = "Existing message",
+                    status = MessageSendStatus.SENT,
+                )
+            }
+            val repository = createRepository(local, remote, RecordingTextMessageSendScheduler(events))
+            val syncJob = launch { repository.startRealtimeSync() }
+            yield()
+
+            remote.emitRemoteMessageId(messageId)
+            yield()
+
+            repository.stopRealtimeSync()
+            syncJob.join()
+
+            assertEquals(2, local.sendAttemptCount)
+            assertEquals(MessageSendStatus.SENT, requireNotNull(local.currentMessage).sendStatus)
+            assertEquals(serverCreatedAt, requireNotNull(local.currentMessage).createdAt)
+            assertTrue(local.upsertedMessagePages.isEmpty())
+            assertEquals(listOf("remote:getMessage", "local:SENT"), events)
+        }
+
+    @Test
+    fun startRealtimeSync_secondStart_doesNotDuplicateSubscription() = runBlocking {
+        val events = mutableListOf<String>()
+        val messageId = UUID.fromString("77777777-7777-7777-7777-777777777777")
+        val sender = remoteUser(senderId)
+        val local = RecordingLocalDataSource(events).apply { seedUser(sender) }
+        val remote = RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt).apply {
+            completeMessagesById[messageId] = remoteMessage(
+                id = messageId,
+                senderId = senderId,
+                text = "Once",
+                status = MessageSendStatus.SENT,
+            )
+        }
+        val repository = createRepository(local, remote, RecordingTextMessageSendScheduler(events))
+        val first = launch { repository.startRealtimeSync() }
+        val second = launch { repository.startRealtimeSync() }
+        yield()
+
+        remote.emitRemoteMessageId(messageId)
+        yield()
+
+        repository.stopRealtimeSync()
+        first.join()
+        second.join()
+
+        assertEquals(1, remote.emittedMessageLookups.size)
+        assertEquals(1, local.upsertedMessagePages.size)
+    }
+
+    @Test
+    fun startRealtimeSync_getMessageFailure_keepsExistingRoomData() = runBlocking {
+        val events = mutableListOf<String>()
+        val existing = persistedTextMessage(
+            UUID.fromString("88888888-8888-8888-8888-888888888888"),
+            MessageSendStatus.SENT,
+        )
+        val local = RecordingLocalDataSource(events).apply { seedMessage(existing) }
+        val remote = RecordingRemoteDataSource(events, serverCreatedAt, serverUpdatedAt).apply {
+            getMessageFailure = IllegalStateException("realtime payload failed")
+        }
+        val repository = createRepository(local, remote, RecordingTextMessageSendScheduler(events))
+        val syncJob = launch { repository.startRealtimeSync() }
+        yield()
+
+        remote.emitRemoteMessageId(existing.id)
+        yield()
+
+        repository.stopRealtimeSync()
+        syncJob.join()
+
+        assertEquals(existing, local.currentMessage)
+        assertTrue(local.upsertedMessagePages.isEmpty())
+        assertEquals(0, local.upsertCount)
+        assertEquals(listOf("remote:getMessage"), events)
+    }
+
+    @Test
     fun sendPersistedTextMessage_failureThenRetry_countsBothAttemptsWithSameId() = runBlocking {
         val events = mutableListOf<String>()
         val failure = IllegalStateException("network unavailable")
@@ -572,6 +706,14 @@ private class RecordingRemoteDataSource(
     var olderLimit: Int? = null
     val usersById = mutableMapOf<UUID, User>()
     val requestedUserIds = mutableListOf<UUID>()
+    val completeMessagesById = mutableMapOf<UUID, Message>()
+    val emittedMessageLookups = mutableListOf<UUID>()
+    var getMessageFailure: Exception? = null
+    private val remoteMessageIds = MutableSharedFlow<UUID>(extraBufferCapacity = 16)
+
+    suspend fun emitRemoteMessageId(messageId: UUID) {
+        remoteMessageIds.emit(messageId)
+    }
 
     override suspend fun insertTextMessage(
         messageId: UUID,
@@ -599,6 +741,13 @@ private class RecordingRemoteDataSource(
         requestedUserIds += userId
         return usersById[userId]
     }
+    override suspend fun getMessage(messageId: UUID): Message? {
+        events += "remote:getMessage"
+        emittedMessageLookups += messageId
+        getMessageFailure?.let { throw it }
+        return completeMessagesById[messageId]
+    }
+    override fun observeRemoteMessageIds(): Flow<UUID> = remoteMessageIds
     override suspend fun getLatestMessages(limit: Int): List<Message> {
         events += "remote:latest"
         latestLimit = limit
