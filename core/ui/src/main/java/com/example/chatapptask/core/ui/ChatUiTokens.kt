@@ -51,4 +51,18 @@ object ChatUiTokens {
         bottomEnd = BubbleTailCorner,
         bottomStart = BubbleCorner,
     )
+
+    val MediaCornerRadius: Dp = 12.dp
+    val MediaInnerCornerRadius: Dp = 4.dp
+    val MediaGridGap: Dp = SpaceXs
+    val SingleMediaMaxHeight: Dp = 208.dp
+    val SingleMediaMinHeight: Dp = 140.dp
+
+    val ComposerPreviewSize: Dp = 76.dp
+    val ComposerPreviewCorner: Dp = 10.dp
+    val ComposerPreviewGap: Dp = SpaceSm
+    val ComposerHorizontalPadding: Dp = SpaceMd
+    val ComposerVerticalPadding: Dp = SpaceSm
+    val ComposerActionSize: Dp = 48.dp
+    val ComposerSendMinWidth: Dp = 72.dp
 }

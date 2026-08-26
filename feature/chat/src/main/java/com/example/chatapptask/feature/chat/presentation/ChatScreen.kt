@@ -5,6 +5,9 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,6 +16,8 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -25,14 +30,18 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
@@ -56,6 +65,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -84,6 +94,7 @@ import com.example.chatapptask.core.domain.model.MessageSendStatus
 import com.example.chatapptask.core.domain.model.User
 import com.example.chatapptask.core.ui.ChatUiTokens
 import com.example.chatapptask.core.ui.clearFocusOnTap
+import com.example.chatapptask.core.ui.rememberHapticAction
 import com.example.chatapptask.feature.chat.R
 import java.time.Instant
 import java.time.ZoneId
@@ -412,42 +423,52 @@ fun MessageBubble(
             ) {
                 Column(
                     modifier = Modifier.padding(
-                        horizontal = ChatUiTokens.MessageBubblePaddingHorizontal,
                         vertical = ChatUiTokens.MessageBubblePaddingVertical,
                     ),
                 ) {
                     if (mediaItems.isNotEmpty()) {
-                        MessageMediaContent(items = mediaItems)
-                    }
-                    if (text != null) {
-                        Text(
-                            text = text,
-                            style = MaterialTheme.typography.bodyLarge,
-                            modifier = if (mediaItems.isNotEmpty()) {
-                                Modifier.padding(top = ChatUiTokens.SpaceSm)
-                            } else {
-                                Modifier
-                            },
+                        MessageMediaContent(
+                            items = mediaItems,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = ChatUiTokens.SpaceXs),
                         )
                     }
-                    Row(
+                    Column(
                         modifier = Modifier
-                            .align(Alignment.End)
-                            .padding(top = ChatUiTokens.SpaceXs),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(ChatUiTokens.SpaceXs + 2.dp),
+                            .padding(horizontal = ChatUiTokens.MessageBubblePaddingHorizontal)
+                            .padding(
+                                top = when {
+                                    mediaItems.isNotEmpty() && text != null -> ChatUiTokens.SpaceSm
+                                    else -> 0.dp
+                                },
+                            ),
                     ) {
-                        Text(
-                            text = message.createdAt.toDisplayTime(),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = metaColor,
-                        )
-                        if (isOutgoing) {
-                            MessageSendState(
-                                status = message.sendStatus,
-                                metaColor = metaColor,
-                                onRetry = onRetry,
+                        if (text != null) {
+                            Text(
+                                text = text,
+                                style = MaterialTheme.typography.bodyLarge,
                             )
+                        }
+                        Row(
+                            modifier = Modifier
+                                .align(Alignment.End)
+                                .padding(top = ChatUiTokens.SpaceXs),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(ChatUiTokens.SpaceXs + 2.dp),
+                        ) {
+                            Text(
+                                text = message.createdAt.toDisplayTime(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = metaColor,
+                            )
+                            if (isOutgoing) {
+                                MessageSendState(
+                                    status = message.sendStatus,
+                                    metaColor = metaColor,
+                                    onRetry = onRetry,
+                                )
+                            }
                         }
                     }
                 }
@@ -559,13 +580,14 @@ private fun MessageSendState(
         )
 
         MessageSendStatus.FAILED -> {
+            val hapticRetry = rememberHapticAction(onRetry)
             Text(
                 text = stringResource(R.string.chat_failed),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.error,
             )
             TextButton(
-                onClick = onRetry,
+                onClick = hapticRetry,
                 contentPadding = PaddingValues(
                     horizontal = ChatUiTokens.SpaceSm,
                     vertical = ChatUiTokens.SpaceXs,
@@ -595,11 +617,41 @@ fun ChatComposer(
     modifier: Modifier = Modifier,
 ) {
     val attachmentDescription = stringResource(R.string.chat_attachment)
+    val hapticSend = rememberHapticAction(onSend)
+    val composerShape = RoundedCornerShape(
+        topStart = ChatUiTokens.SpaceMd,
+        topEnd = ChatUiTokens.SpaceMd,
+    )
+    val sendContainerColor by animateColorAsState(
+        targetValue = if (canSend) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerHighest
+        },
+        animationSpec = tween(durationMillis = 160),
+        label = "sendContainerColor",
+    )
+    val sendContentColor by animateColorAsState(
+        targetValue = if (canSend) {
+            MaterialTheme.colorScheme.onPrimary
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        animationSpec = tween(durationMillis = 160),
+        label = "sendContentColor",
+    )
+    val sendScale by animateFloatAsState(
+        targetValue = if (canSend) 1f else 0.96f,
+        animationSpec = tween(durationMillis = 160),
+        label = "sendScale",
+    )
 
     Surface(
         modifier = modifier.fillMaxWidth(),
+        shape = composerShape,
         color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 3.dp,
+        tonalElevation = 2.dp,
+        shadowElevation = 6.dp,
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             ComposerAttachmentPreviewRow(
@@ -608,48 +660,86 @@ fun ChatComposer(
                 enabled = !isSending,
             )
             Row(
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                modifier = Modifier.padding(
+                    horizontal = ChatUiTokens.ComposerHorizontalPadding,
+                    vertical = ChatUiTokens.ComposerVerticalPadding,
+                ),
                 verticalAlignment = Alignment.Bottom,
             ) {
-                OutlinedIconButton(
+                FilledTonalIconButton(
                     onClick = onAttachmentClick,
                     enabled = !isSending,
-                    modifier = Modifier.semantics {
-                        contentDescription = attachmentDescription
-                    },
+                    modifier = Modifier
+                        .size(ChatUiTokens.ComposerActionSize)
+                        .semantics { contentDescription = attachmentDescription },
+                    shape = MaterialTheme.shapes.medium,
+                    colors = IconButtonDefaults.filledTonalIconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                    ),
                 ) {
                     Text(
                         text = "+",
                         style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Medium,
                     )
                 }
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(ChatUiTokens.SpaceSm))
                 OutlinedTextField(
                     value = text,
                     onValueChange = onTextChanged,
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text(stringResource(R.string.chat_composer_placeholder)) },
+                    placeholder = {
+                        Text(
+                            text = stringResource(R.string.chat_composer_placeholder),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
                     minLines = 1,
                     maxLines = 4,
+                    shape = MaterialTheme.shapes.large,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+                        disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+                    ),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                     keyboardActions = KeyboardActions(
-                        onSend = { if (canSend) onSend() },
+                        onSend = { if (canSend) hapticSend() },
                     ),
                 )
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(ChatUiTokens.SpaceSm))
                 Button(
-                    onClick = onSend,
+                    onClick = hapticSend,
                     enabled = canSend,
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+                    modifier = Modifier
+                        .defaultMinSize(minWidth = ChatUiTokens.ComposerSendMinWidth)
+                        .height(ChatUiTokens.ComposerActionSize)
+                        .graphicsLayer {
+                            scaleX = sendScale
+                            scaleY = sendScale
+                        },
+                    shape = MaterialTheme.shapes.medium,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = sendContainerColor,
+                        contentColor = sendContentColor,
+                        disabledContainerColor = sendContainerColor,
+                        disabledContentColor = sendContentColor,
+                    ),
+                    contentPadding = PaddingValues(horizontal = ChatUiTokens.SpaceMd),
                 ) {
                     if (isSending) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(18.dp),
-                            color = MaterialTheme.colorScheme.onPrimary,
+                            color = sendContentColor,
                             strokeWidth = 2.dp,
                         )
                     } else {
-                        Text(stringResource(R.string.chat_send))
+                        Text(
+                            text = stringResource(R.string.chat_send),
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                        )
                     }
                 }
             }

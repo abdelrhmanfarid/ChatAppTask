@@ -4,13 +4,19 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -39,9 +45,13 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.chatapptask.core.domain.model.MediaType
+import com.example.chatapptask.core.ui.ChatUiTokens
+import com.example.chatapptask.core.ui.rememberHapticAction
 import com.example.chatapptask.feature.chat.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+
+private val PreviewShape = RoundedCornerShape(ChatUiTokens.ComposerPreviewCorner)
 
 @Composable
 fun ComposerAttachmentPreviewRow(
@@ -50,37 +60,48 @@ fun ComposerAttachmentPreviewRow(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
 ) {
-    if (attachments.isEmpty()) return
-
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(start = 12.dp, end = 12.dp, top = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+    AnimatedVisibility(
+        visible = attachments.isNotEmpty(),
+        modifier = modifier,
+        enter = expandVertically(animationSpec = tween(durationMillis = 180)) +
+            fadeIn(animationSpec = tween(durationMillis = 180)),
+        exit = shrinkVertically(animationSpec = tween(durationMillis = 140)) +
+            fadeOut(animationSpec = tween(durationMillis = 140)),
     ) {
-        Text(
-            text = stringResource(
-                R.string.chat_attachment_count,
-                attachments.size,
-                MAX_COMPOSER_ATTACHMENTS,
-            ),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontWeight = FontWeight.Medium,
-        )
-        LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = PaddingValues(vertical = 2.dp),
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(
+                    start = ChatUiTokens.ComposerHorizontalPadding,
+                    end = ChatUiTokens.ComposerHorizontalPadding,
+                    top = ChatUiTokens.SpaceSm,
+                ),
+            verticalArrangement = Arrangement.spacedBy(ChatUiTokens.SpaceSm),
         ) {
-            items(
-                items = attachments,
-                key = { attachment -> attachment.uri },
-            ) { attachment ->
-                ComposerAttachmentThumbnail(
-                    attachment = attachment,
-                    onRemove = { onRemove(attachment.uri) },
-                    enabled = enabled,
-                )
+            Text(
+                text = stringResource(
+                    R.string.chat_attachment_count,
+                    attachments.size,
+                    MAX_COMPOSER_ATTACHMENTS,
+                ),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = FontWeight.Medium,
+            )
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(ChatUiTokens.ComposerPreviewGap),
+                contentPadding = PaddingValues(bottom = ChatUiTokens.SpaceXs),
+            ) {
+                items(
+                    items = attachments,
+                    key = { attachment -> attachment.uri },
+                ) { attachment ->
+                    ComposerAttachmentThumbnail(
+                        attachment = attachment,
+                        onRemove = rememberHapticAction { onRemove(attachment.uri) },
+                        enabled = enabled,
+                    )
+                }
             }
         }
     }
@@ -91,6 +112,7 @@ private fun ComposerAttachmentThumbnail(
     attachment: ComposerAttachment,
     onRemove: () -> Unit,
     enabled: Boolean,
+    modifier: Modifier = Modifier,
 ) {
     val removeDescription = stringResource(R.string.chat_attachment_remove)
     val itemDescription = when (attachment.mediaType) {
@@ -100,16 +122,21 @@ private fun ComposerAttachmentThumbnail(
     val previewBitmap = rememberAttachmentPreviewBitmap(attachment)
 
     Box(
-        modifier = Modifier
-            .size(72.dp)
+        modifier = modifier
+            .size(ChatUiTokens.ComposerPreviewSize)
             .semantics { contentDescription = itemDescription },
     ) {
         Surface(
             modifier = Modifier
                 .fillMaxSize()
-                .clip(RoundedCornerShape(12.dp)),
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            tonalElevation = 1.dp,
+                .clip(PreviewShape)
+                .border(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant,
+                    shape = PreviewShape,
+                ),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            tonalElevation = 0.dp,
         ) {
             if (previewBitmap != null) {
                 Box(modifier = Modifier.fillMaxSize()) {
@@ -120,7 +147,10 @@ private fun ComposerAttachmentThumbnail(
                         contentScale = ContentScale.Crop,
                     )
                     if (attachment.mediaType == MediaType.VIDEO) {
-                        VideoBadge(modifier = Modifier.align(Alignment.BottomStart))
+                        MessageVideoOverlay(
+                            modifier = Modifier.fillMaxSize(),
+                            showBadge = true,
+                        )
                     }
                 }
             } else {
@@ -132,40 +162,24 @@ private fun ComposerAttachmentThumbnail(
             enabled = enabled,
             modifier = Modifier
                 .align(Alignment.TopEnd)
+                .size(ChatUiTokens.ComposerActionSize)
                 .semantics { contentDescription = removeDescription },
         ) {
             Box(
                 modifier = Modifier
-                    .size(22.dp)
+                    .size(24.dp)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.55f)),
+                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.62f)),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     text = "×",
-                    color = MaterialTheme.colorScheme.onPrimary,
+                    color = MaterialTheme.colorScheme.inverseOnSurface,
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Bold,
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun VideoBadge(modifier: Modifier = Modifier) {
-    Surface(
-        modifier = modifier.padding(6.dp),
-        shape = RoundedCornerShape(6.dp),
-        color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.65f),
-    ) {
-        Text(
-            text = stringResource(R.string.chat_attachment_video_badge),
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-            color = MaterialTheme.colorScheme.onPrimary,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.SemiBold,
-        )
     }
 }
 
