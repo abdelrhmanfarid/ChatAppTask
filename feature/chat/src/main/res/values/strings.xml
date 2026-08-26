@@ -24,4 +24,6 @@
     <string name="chat_message_video">Video</string>
     <string name="chat_message_image_loading">Loading image</string>
     <string name="chat_message_image_unavailable">Image unavailable</string>
+    <string name="chat_sender_unknown">Unknown</string>
+    <string name="chat_sender_avatar">Sender profile photo</string>
 </resources>

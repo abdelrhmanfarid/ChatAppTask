@@ -18,6 +18,8 @@ interface ChatLocalDataSource {
 
     fun observeUserById(userId: UUID): Flow<User?>
 
+    fun observeUsers(): Flow<List<User>>
+
     suspend fun upsertMessage(message: Message)
 
     suspend fun deleteMessage(messageId: UUID)

@@ -311,6 +311,20 @@ class ChatViewModelTest {
             sendStatus = status,
         )
 
+    private fun user(
+        id: String,
+        username: String,
+        profileImagePath: String? = null,
+    ): User =
+        User(
+            id = UUID.fromString(id),
+            username = username,
+            profileImagePath = profileImagePath,
+            age = null,
+            createdAt = Instant.parse("2026-08-23T11:00:00Z"),
+            updatedAt = Instant.parse("2026-08-23T11:00:00Z"),
+        )
+
     @Test
     fun currentUserId_isExposedForMessageOwnership() = runTest(dispatcher) {
         val repository = FakeChatRepository()
@@ -542,6 +556,74 @@ class ChatViewModelTest {
         assertFalse(viewModel.uiState.value.isLoadingOlder)
         assertEquals(listOf(existing), viewModel.uiState.value.messages)
     }
+
+    @Test
+    fun observedUsers_areExposedInSendersByIdKeyedByUserId() = runTest(dispatcher) {
+        val first = user(
+            id = "11111111-1111-1111-1111-111111111111",
+            username = "alice",
+        )
+        val second = user(
+            id = "22222222-2222-2222-2222-222222222222",
+            username = "bob",
+        )
+        val userRepository = FakeUserRepository()
+        val viewModel = ChatViewModel(FakeChatRepository(), userRepository)
+
+        userRepository.emitUsers(listOf(first, second))
+        advanceUntilIdle()
+
+        assertEquals(
+            mapOf(first.id to first, second.id to second),
+            viewModel.uiState.value.sendersById,
+        )
+        assertEquals(first, viewModel.uiState.value.sendersById[first.id])
+        assertEquals(second, viewModel.uiState.value.sendersById[second.id])
+    }
+
+    @Test
+    fun subsequentUserEmissions_updateSendersById() = runTest(dispatcher) {
+        val userId = UUID.fromString("11111111-1111-1111-1111-111111111111")
+        val initial = user(id = userId.toString(), username = "alice")
+        val updated = user(id = userId.toString(), username = "alice_updated")
+        val userRepository = FakeUserRepository()
+        val viewModel = ChatViewModel(FakeChatRepository(), userRepository)
+
+        userRepository.emitUsers(listOf(initial))
+        advanceUntilIdle()
+        assertEquals("alice", viewModel.uiState.value.sendersById[userId]?.username)
+
+        userRepository.emitUsers(listOf(updated))
+        advanceUntilIdle()
+        assertEquals("alice_updated", viewModel.uiState.value.sendersById[userId]?.username)
+    }
+
+    @Test
+    fun senderObservation_doesNotDisturbMessageObservation() = runTest(dispatcher) {
+        val messages = listOf(
+            message("00000000-0000-0000-0000-000000000002"),
+            message("00000000-0000-0000-0000-000000000001"),
+        )
+        val sender = user(
+            id = "11111111-1111-1111-1111-111111111111",
+            username = "alice",
+        )
+        val repository = FakeChatRepository()
+        val userRepository = FakeUserRepository()
+        val viewModel = ChatViewModel(repository, userRepository)
+
+        repository.messages.value = messages
+        userRepository.emitUsers(listOf(sender))
+        advanceUntilIdle()
+
+        assertEquals(messages, viewModel.uiState.value.messages)
+        assertEquals(mapOf(sender.id to sender), viewModel.uiState.value.sendersById)
+        assertTrue(viewModel.uiState.value.hasMoreOlderMessages)
+        assertFalse(viewModel.uiState.value.isLoadingOlder)
+        assertFalse(viewModel.uiState.value.isSendRequestInProgress)
+        assertEquals("", viewModel.uiState.value.composerText)
+        assertTrue(viewModel.uiState.value.selectedAttachments.isEmpty())
+    }
 }
 
 private class FakeChatRepository : ChatRepository {
@@ -613,12 +695,19 @@ private fun attachment(
 
 private class FakeUserRepository(
     private val currentUserId: UUID = UUID.fromString("33eed91f-846c-49c8-851d-bca519b01432"),
+    private val users: MutableStateFlow<List<User>> = MutableStateFlow(emptyList()),
 ) : UserRepository {
+    fun emitUsers(value: List<User>) {
+        users.value = value
+    }
+
     override suspend fun getCurrentUserId(): UUID = currentUserId
 
     override suspend fun getUser(userId: UUID): User? = unused()
 
     override fun observeUser(userId: UUID): Flow<User?> = unused()
+
+    override fun observeUsers(): Flow<List<User>> = users
 
     override suspend fun upsertUser(user: User) = unused()
 

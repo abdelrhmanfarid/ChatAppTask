@@ -3,6 +3,7 @@ package com.example.chatapptask.feature.chat.presentation
 import com.example.chatapptask.core.domain.model.MediaType
 import com.example.chatapptask.core.domain.model.Message
 import com.example.chatapptask.core.domain.model.PendingMedia
+import com.example.chatapptask.core.domain.model.User
 import java.util.UUID
 
 const val MAX_COMPOSER_ATTACHMENTS = 10
@@ -30,6 +31,7 @@ data class ComposerAttachment(
 
 data class ChatUiState(
     val messages: List<Message> = emptyList(),
+    val sendersById: Map<UUID, User> = emptyMap(),
     val currentUserId: UUID? = null,
     val composerText: String = "",
     val selectedAttachments: List<ComposerAttachment> = emptyList(),

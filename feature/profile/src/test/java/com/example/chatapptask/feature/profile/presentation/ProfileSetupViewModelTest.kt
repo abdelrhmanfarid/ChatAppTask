@@ -268,4 +268,6 @@ private class FakeUserRepository : UserRepository {
     override suspend fun getUser(userId: UUID): User? = null
 
     override fun observeUser(userId: UUID): Flow<User?> = flowOf(null)
+
+    override fun observeUsers(): Flow<List<User>> = flowOf(emptyList())
 }

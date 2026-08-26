@@ -40,6 +40,9 @@ class RoomChatLocalDataSource @Inject constructor(
     override fun observeUserById(userId: UUID): Flow<User?> =
         userDao.observeUserById(userId).map { user -> user?.toDomain() }
 
+    override fun observeUsers(): Flow<List<User>> =
+        userDao.observeUsers().map { users -> users.map { user -> user.toDomain() } }
+
     override suspend fun upsertMessage(message: Message) {
         messageDao.upsertMessage(message.toEntity())
         if (message.media.isNotEmpty()) {

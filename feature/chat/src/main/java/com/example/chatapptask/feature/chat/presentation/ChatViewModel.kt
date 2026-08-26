@@ -3,6 +3,7 @@ package com.example.chatapptask.feature.chat.presentation
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.chatapptask.core.domain.ChatMediaPublicUrlFactory
+import com.example.chatapptask.core.domain.ProfileImagePublicUrlFactory
 import com.example.chatapptask.core.domain.model.MessageSendStatus
 import com.example.chatapptask.core.domain.repository.ChatRepository
 import com.example.chatapptask.core.domain.repository.UserRepository
@@ -23,6 +24,8 @@ class ChatViewModel @Inject constructor(
     private val userRepository: UserRepository,
     private val chatMediaPublicUrlFactory: ChatMediaPublicUrlFactory =
         ChatMediaPublicUrlFactory { null },
+    private val profileImagePublicUrlFactory: ProfileImagePublicUrlFactory =
+        ProfileImagePublicUrlFactory { null },
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
@@ -45,6 +48,14 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             chatRepository.observeMessages().collect { messages ->
                 _uiState.update { state -> state.copy(messages = messages) }
+            }
+        }
+
+        viewModelScope.launch {
+            userRepository.observeUsers().collect { users ->
+                _uiState.update { state ->
+                    state.copy(sendersById = users.associateBy { user -> user.id })
+                }
             }
         }
 
@@ -72,6 +83,9 @@ class ChatViewModel @Inject constructor(
 
     internal fun publicChatMediaUrl(storagePath: String): String? =
         chatMediaPublicUrlFactory.publicUrlFor(storagePath)
+
+    internal fun publicProfileImageUrl(profileImagePath: String?): String? =
+        profileImagePublicUrlFactory.publicUrlFor(profileImagePath)
 
     fun onAction(action: ChatAction) {
         when (action) {
