@@ -1,9 +1,10 @@
 # Next Steps
 
-Required Android implementation and runtime verification are complete.
+Required Android implementation and Bonus #1 are complete. Bonus #2 Android stages (Firebase foundation, FID registration/reconciliation, incoming-chat notifications + tap → Chat) are on `feature/fcm-notifications`.
 
-1. On `feature/visual-polish`, manually verify Bonus #1 phase 2 (media messages, attachment previews, composer polish, micro-interactions) in light/dark — especially IME/focus and 1–10 attachment layouts.
-2. After verification, Bonus #1 is complete; remaining bonus work is FCM, voice notes, and instrumentation/UI tests.
-3. Finish evaluator/submission documentation (root README + backend/workflow accuracy) if not already merged, then promote through `development` → `staging` → `master` as usual.
-4. Before GitHub submission, confirm repository visibility is **Public**.
-5. Optional product surfaces already noted as out of required scope (full-screen media viewer, in-bubble video playback, download/save) remain non-mandatory unless promoted explicitly.
+1. Implement/deploy remaining Supabase push backend if needed: Database Webhook → Edge Function → FCM HTTP v1 **data-only** send using the Android contract (`type`, `schema_version`, `message_id`, `sender_id`, `sender_username`, `preview_kind`, `preview_text`). Confirm `register-push` / `push_registrations` remain healthy.
+2. Manually verify on two devices: background notification, foreground Chat suppression, foreground non-Chat allow, self-sender suppression, permission denied = no crash/no post, notification tap cold start → startup → Chat, duplicate `message_id` replaces same notification, multiple incoming messages collapse under one expandable group with “N new messages” summary (Samsung/Android shade).
+3. Run focused JVM tests: `:app:testDebugUnitTest --tests "com.example.chatapptask.fcm.*"`.
+4. Finish evaluator/submission documentation if needed, then promote through `development` → `staging` → `master` as usual.
+5. Before GitHub submission, confirm repository visibility is **Public**.
+6. Optional out-of-scope surfaces (full-screen media viewer, in-bubble video playback, download/save) remain non-mandatory unless promoted explicitly.
