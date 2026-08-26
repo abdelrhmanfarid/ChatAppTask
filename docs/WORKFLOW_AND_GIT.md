@@ -25,6 +25,15 @@ For each task:
 
 ## Git
 
+Branch flow used by this project:
+
+- `feature/*` — isolated feature implementation
+- `development` — integration branch for completed features
+- `staging` — final integrated verification / pre-release before stable promotion
+- `master` — stable / default submission branch
+
+Promotion path: `feature/*` → `development` → `staging` → `master`.
+
 Do not commit or push unless explicitly instructed.
 
 When asked to prepare a change:

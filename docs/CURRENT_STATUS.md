@@ -2,6 +2,8 @@
 
 Branch: `feature/final-requirements`. Repository code is authoritative; check `git status` before work.
 
+Required Android implementation and manual runtime verification for the assignment are complete. Remaining required work for this branch is evaluator/submission documentation (root README and related docs). Bonus features have not started.
+
 ## Modules
 
 - `:app`: application entry point, Material 3 theme, Android/Compose splash, Hilt/WorkManager setup.
@@ -66,10 +68,11 @@ Branch: `feature/final-requirements`. Repository code is authoritative; check `g
 - Outgoing bubbles show `SENDING`, `SENT`, or `FAILED`; failed messages retry through `ChatAction.RetryMessage`. `ChatRepository.retryMessage` routes by persisted type: text-only rows reuse unique work `send-text-message:<UUID>` (`REPLACE`); media rows (including media + optional text) reuse unique work `send-media-message:<UUID>` (`REPLACE`) without creating a new Room message. Already `UPLOADED` attachments and their storage paths are left unchanged until the existing media worker runs.
 - `MainActivity` hosts `ChatAppRoot` and keeps the Android SplashScreen API visible until startup resolution finishes. `StartupViewModel` resolves the current UUID/profile through `UserRepository`. A found profile goes to Chat; a successful empty lookup goes to Profile Setup; a thrown lookup failure shows a generic retry screen. While resolving after the system splash (including Retry), a splash-colored screen with a small progress indicator is shown instead of the branded Compose splash. Successful Profile Setup navigates to Chat.
 
-## Not Implemented
+## Not Implemented (non-mandatory / bonus or future)
 
 - Full-screen media viewer, video playback, download/save, per-attachment retry UI, and upload byte-progress UI. Photo Picker + composer preview + send handoff + Storage upload + `create_media_message` + Room `SENT` reconciliation + chat bubble rendering are implemented.
-- Incoming-message push / FCM, Supabase Auth, presence, typing indicators, and read receipts.
+- Bonus: exceptional visual polish, FCM push notifications, audio/voice messages, product instrumentation/UI tests.
+- Out of scope unless explicitly required later: Supabase Auth, presence, typing indicators, and read receipts.
 
 ## Working Conventions
 
