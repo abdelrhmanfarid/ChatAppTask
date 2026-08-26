@@ -43,6 +43,20 @@ object ChatNotificationIntents {
     }
 
     /**
+     * Summary tap opens Chat the same way as a child (no scroll-to-message).
+     * Uses the fixed summary notification ID as the PendingIntent request code.
+     */
+    fun groupSummaryContentPendingIntent(context: Context, latestMessageId: String): PendingIntent {
+        val intent = openChatIntent(context, latestMessageId)
+        return PendingIntent.getActivity(
+            context,
+            ChatIncomingNotificationPolicy.GROUP_SUMMARY_NOTIFICATION_ID,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+    }
+
+    /**
      * Pure consume decision used by [consumeOpenChatMessageId].
      * Returns the message id when this delivery should be handled once.
      */

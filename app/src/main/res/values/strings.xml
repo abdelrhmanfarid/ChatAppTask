@@ -12,4 +12,9 @@
     <string name="notification_chat_body_attachments">Sent attachments</string>
     <string name="notification_chat_public_title">Chat App</string>
     <string name="notification_chat_public_text">New message</string>
+    <string name="notification_chat_group_summary_title">Chat App</string>
+    <plurals name="notification_chat_group_summary_text">
+        <item quantity="one">%d new message</item>
+        <item quantity="other">%d new messages</item>
+    </plurals>
 </resources>

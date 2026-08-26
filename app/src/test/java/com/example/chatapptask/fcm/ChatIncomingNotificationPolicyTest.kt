@@ -119,4 +119,72 @@ class ChatIncomingNotificationPolicyTest {
     fun groupKey_isStable() {
         assertEquals("chat_messages", ChatIncomingNotificationPolicy.GROUP_KEY)
     }
+
+    @Test
+    fun childNotificationIdentity_sharesGroupKeyAndIsNotSummary() {
+        val messageId = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+        val identity = ChatIncomingNotificationPolicy.childNotificationIdentity(messageId)
+        assertEquals(ChatIncomingNotificationPolicy.GROUP_KEY, identity.groupKey)
+        assertEquals(ChatIncomingNotificationPolicy.notificationId(messageId), identity.id)
+        assertFalse(identity.isGroupSummary)
+        assertEquals(
+            ChatIncomingNotificationPolicy.GROUP_KEY,
+            ChatIncomingNotificationPolicy.childNotificationIdentity("other-msg").groupKey,
+        )
+    }
+
+    @Test
+    fun summaryNotificationIdentity_usesFixedIdAndIsGroupSummary() {
+        val identity = ChatIncomingNotificationPolicy.summaryNotificationIdentity()
+        assertEquals(ChatIncomingNotificationPolicy.GROUP_SUMMARY_NOTIFICATION_ID, identity.id)
+        assertEquals(ChatIncomingNotificationPolicy.GROUP_KEY, identity.groupKey)
+        assertTrue(identity.isGroupSummary)
+        assertEquals(
+            "incoming-chat-group-summary".hashCode(),
+            ChatIncomingNotificationPolicy.GROUP_SUMMARY_NOTIFICATION_ID,
+        )
+    }
+
+    @Test
+    fun summaryNotificationId_differsFromChildAndWorkManagerStyleKeys() {
+        val childId = ChatIncomingNotificationPolicy.notificationId("msg-a")
+        val summaryId = ChatIncomingNotificationPolicy.GROUP_SUMMARY_NOTIFICATION_ID
+        assertNotEquals(childId, summaryId)
+        assertNotEquals("send-text-message:msg-a".hashCode(), summaryId)
+        assertNotEquals("send-media-message:msg-a".hashCode(), summaryId)
+        assertNotEquals(
+            "incoming-chat-message:msg-a".hashCode(),
+            summaryId,
+        )
+    }
+
+    @Test
+    fun countActiveGroupChildren_ignoresOtherGroupsAndSummaries() {
+        val group = ChatIncomingNotificationPolicy.GROUP_KEY
+        assertEquals(
+            2,
+            ChatIncomingNotificationPolicy.countActiveGroupChildren(
+                listOf(
+                    group to false,
+                    group to false,
+                    group to true,
+                    "other_group" to false,
+                    null to false,
+                ),
+            ),
+        )
+        assertEquals(
+            0,
+            ChatIncomingNotificationPolicy.countActiveGroupChildren(
+                listOf(group to true),
+            ),
+        )
+    }
+
+    @Test
+    fun groupSummaryMessageCount_coercesAtLeastOne() {
+        assertEquals(1, ChatIncomingNotificationPolicy.groupSummaryMessageCount(0))
+        assertEquals(1, ChatIncomingNotificationPolicy.groupSummaryMessageCount(1))
+        assertEquals(3, ChatIncomingNotificationPolicy.groupSummaryMessageCount(3))
+    }
 }

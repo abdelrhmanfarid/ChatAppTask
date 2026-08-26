@@ -7,7 +7,25 @@ object ChatIncomingNotificationPolicy {
     /** Distinct from WorkManager send keys (`send-text-message:` / `send-media-message:`). */
     private const val NOTIFICATION_ID_PREFIX = "incoming-chat-message:"
 
+    /** Distinct from child IDs and WorkManager send notification IDs. */
+    private const val GROUP_SUMMARY_ID_KEY = "incoming-chat-group-summary"
+
     const val GROUP_KEY = "chat_messages"
+
+    /**
+     * Fixed notification ID for the single expandable group summary.
+     * Separate from every [notificationId] child and from `message_send_work` IDs.
+     */
+    val GROUP_SUMMARY_NOTIFICATION_ID: Int = GROUP_SUMMARY_ID_KEY.hashCode()
+
+    /**
+     * Identity used when posting a grouped incoming notification (child or summary).
+     */
+    data class GroupedNotificationIdentity(
+        val id: Int,
+        val groupKey: String,
+        val isGroupSummary: Boolean,
+    )
 
     fun shouldSuppressForSender(
         payloadSenderId: String,
@@ -22,6 +40,36 @@ object ChatIncomingNotificationPolicy {
      */
     fun notificationId(messageId: String): Int =
         (NOTIFICATION_ID_PREFIX + messageId.trim()).hashCode()
+
+    fun childNotificationIdentity(messageId: String): GroupedNotificationIdentity =
+        GroupedNotificationIdentity(
+            id = notificationId(messageId),
+            groupKey = GROUP_KEY,
+            isGroupSummary = false,
+        )
+
+    fun summaryNotificationIdentity(): GroupedNotificationIdentity =
+        GroupedNotificationIdentity(
+            id = GROUP_SUMMARY_NOTIFICATION_ID,
+            groupKey = GROUP_KEY,
+            isGroupSummary = true,
+        )
+
+    /**
+     * Counts active group children from (groupKey, isGroupSummary) pairs.
+     * Used with [android.app.NotificationManager.getActiveNotifications] so the
+     * summary reflects currently visible children without persisted state.
+     */
+    fun countActiveGroupChildren(
+        notifications: List<Pair<String?, Boolean>>,
+        groupKey: String = GROUP_KEY,
+    ): Int = notifications.count { (key, isSummary) ->
+        key == groupKey && !isSummary
+    }
+
+    /** Summary body count is at least 1 after a child was just posted. */
+    fun groupSummaryMessageCount(activeChildCount: Int): Int =
+        activeChildCount.coerceAtLeast(1)
 
     /**
      * Privacy-safe notification body from validated preview fields.

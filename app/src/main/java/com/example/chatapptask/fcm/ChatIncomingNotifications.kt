@@ -12,6 +12,9 @@ import com.example.chatapptask.R
 
 /**
  * Incoming chat message notifications (distinct from WorkManager channel `message_send_work`).
+ *
+ * Each message posts a child notification under a stable group key, plus one fixed
+ * group-summary notification so the shade can collapse them into an expandable group.
  */
 object ChatIncomingNotifications {
     const val CHANNEL_ID = "chat_messages"
@@ -62,6 +65,7 @@ object ChatIncomingNotifications {
             mediaOnly = context.getString(R.string.notification_chat_body_attachments),
         )
 
+        val childIdentity = ChatIncomingNotificationPolicy.childNotificationIdentity(payload.messageId)
         val publicVersion = Notification.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
             .setContentTitle(context.getString(R.string.notification_chat_public_title))
@@ -79,14 +83,72 @@ object ChatIncomingNotifications {
             .setPublicVersion(publicVersion)
             .setAutoCancel(true)
             .setOnlyAlertOnce(true)
-            .setGroup(ChatIncomingNotificationPolicy.GROUP_KEY)
+            .setGroup(childIdentity.groupKey)
+            .setGroupAlertBehavior(Notification.GROUP_ALERT_CHILDREN)
             .setContentIntent(
                 ChatNotificationIntents.contentPendingIntent(context, payload.messageId),
             )
             .build()
 
-        val id = ChatIncomingNotificationPolicy.notificationId(payload.messageId)
-        manager.notify(id, notification)
+        manager.notify(childIdentity.id, notification)
+        postGroupSummary(context, manager, latestMessageId = payload.messageId)
         return true
+    }
+
+    private fun postGroupSummary(
+        context: Context,
+        manager: NotificationManager,
+        latestMessageId: String,
+    ) {
+        val summaryIdentity = ChatIncomingNotificationPolicy.summaryNotificationIdentity()
+        val childCount = ChatIncomingNotificationPolicy.groupSummaryMessageCount(
+            ChatIncomingNotificationPolicy.countActiveGroupChildren(
+                manager.activeNotifications.map { sbn ->
+                    val notification = sbn.notification
+                    val isSummary =
+                        (notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0
+                    notification.group to isSummary
+                },
+            ),
+        )
+        val summaryText = context.resources.getQuantityString(
+            R.plurals.notification_chat_group_summary_text,
+            childCount,
+            childCount,
+        )
+        val summaryTitle = context.getString(R.string.notification_chat_group_summary_title)
+
+        val publicVersion = Notification.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_notify_chat)
+            .setContentTitle(context.getString(R.string.notification_chat_public_title))
+            .setContentText(context.getString(R.string.notification_chat_public_text))
+            .setCategory(Notification.CATEGORY_MESSAGE)
+            .build()
+
+        val summary = Notification.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_notify_chat)
+            .setContentTitle(summaryTitle)
+            .setContentText(summaryText)
+            .setStyle(
+                Notification.InboxStyle()
+                    .setSummaryText(summaryText),
+            )
+            .setCategory(Notification.CATEGORY_MESSAGE)
+            .setVisibility(Notification.VISIBILITY_PRIVATE)
+            .setPublicVersion(publicVersion)
+            .setAutoCancel(true)
+            .setOnlyAlertOnce(true)
+            .setGroup(summaryIdentity.groupKey)
+            .setGroupSummary(summaryIdentity.isGroupSummary)
+            .setGroupAlertBehavior(Notification.GROUP_ALERT_CHILDREN)
+            .setContentIntent(
+                ChatNotificationIntents.groupSummaryContentPendingIntent(
+                    context,
+                    latestMessageId,
+                ),
+            )
+            .build()
+
+        manager.notify(summaryIdentity.id, summary)
     }
 }
