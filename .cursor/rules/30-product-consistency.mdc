@@ -1,0 +1,21 @@
+---
+description: Prevent invented product behavior and backend/auth drift
+globs:
+  - "**/*.kt"
+  - "**/*.sql"
+  - "**/*.md"
+alwaysApply: false
+---
+
+Read `docs/PRODUCT_REQUIREMENTS.md` and `docs/BACKEND_SUPABASE.md` when a task touches product behavior, profiles, messaging, backend, or data contracts.
+
+Do not invent:
+- authentication
+- presence/online status
+- member-since data
+- read receipts
+- unsupported profile fields
+- arbitrary age rules
+- new message states
+
+If a requested UI requires data that does not exist, flag the mismatch instead of fabricating it.

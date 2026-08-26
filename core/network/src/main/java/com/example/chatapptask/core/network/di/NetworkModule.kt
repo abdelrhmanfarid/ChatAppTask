@@ -22,6 +22,7 @@ object NetworkModule {
             supabaseUrl = SupabaseConfig.url,
             supabaseKey = SupabaseConfig.anonKey,
         ) {
+            configureNetworkInspection()
             install(Postgrest)
             install(Realtime)
             install(Storage)

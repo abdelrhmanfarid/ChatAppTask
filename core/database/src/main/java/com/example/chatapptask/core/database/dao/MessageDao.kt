@@ -20,6 +20,9 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE id = :messageId LIMIT 1")
     suspend fun getMessageById(messageId: UUID): MessageEntity?
 
+    @Query("DELETE FROM messages WHERE id = :messageId")
+    suspend fun deleteMessage(messageId: UUID)
+
     @Query("SELECT * FROM messages ORDER BY created_at DESC, id DESC")
     fun observeMessages(): Flow<List<MessageEntity>>
 
@@ -51,16 +54,45 @@ interface MessageDao {
         """
         UPDATE messages
         SET send_status = :status,
-            send_attempt_count = :attemptCount,
+            send_attempt_count = send_attempt_count + 1,
+            last_send_error = NULL
+        WHERE id = :messageId
+        """,
+    )
+    suspend fun beginSendAttempt(
+        messageId: UUID,
+        status: MessageSendStatus,
+    )
+
+    @Query(
+        """
+        UPDATE messages
+        SET send_status = :status,
             last_send_error = :lastError
         WHERE id = :messageId
         """,
     )
-    suspend fun updateSendState(
+    suspend fun markSendFailed(
         messageId: UUID,
         status: MessageSendStatus,
-        attemptCount: Int,
         lastError: String?,
+    )
+
+    @Query(
+        """
+        UPDATE messages
+        SET created_at = :createdAt,
+            updated_at = :updatedAt,
+            send_status = :status,
+            last_send_error = NULL
+        WHERE id = :messageId
+        """,
+    )
+    suspend fun updateAfterSendSuccess(
+        messageId: UUID,
+        createdAt: Instant,
+        updatedAt: Instant,
+        status: MessageSendStatus,
     )
 
     @Query(
@@ -73,4 +105,14 @@ interface MessageDao {
     suspend fun getMessagesBySendStatuses(
         statuses: List<MessageSendStatus>,
     ): List<MessageEntity>
+
+    @Query(
+        """
+        SELECT * FROM messages
+        WHERE send_status = :status
+        ORDER BY created_at ASC, id ASC
+        LIMIT 1
+        """,
+    )
+    suspend fun getOldestMessageBySendStatus(status: MessageSendStatus): MessageEntity?
 }

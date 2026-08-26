@@ -1,0 +1,25 @@
+---
+description: Keep AI work focused and token-efficient
+alwaysApply: true
+---
+
+# Efficient Task Execution
+
+For every task:
+
+1. Read only the minimum relevant docs.
+2. Search for the exact symbols/files involved.
+3. Inspect nearby implementation and tests.
+4. Do not perform a full repository walkthrough unless the task truly spans the whole repo.
+5. State assumptions only when repository evidence is unavailable.
+6. Prefer focused edits over broad refactors.
+7. Reuse existing patterns before adding new abstractions.
+8. Verify the narrowest useful build/test scope first.
+9. Do not repeat long project summaries in responses.
+10. Report:
+   - changed files
+   - behavior changed
+   - verification performed
+   - remaining issue, if any
+
+The repository is the source of truth for code. The docs are the source of truth for durable project decisions.

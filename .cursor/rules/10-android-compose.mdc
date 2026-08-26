@@ -1,0 +1,21 @@
+---
+description: Android and Jetpack Compose implementation rules
+globs:
+  - "**/*.kt"
+  - "**/*.kts"
+alwaysApply: false
+---
+
+Follow `docs/ANDROID_IMPLEMENTATION_RULES.md`, `docs/ARCHITECTURE.md`, and `docs/UI_UX_SPEC.md`.
+
+Important:
+- prefer Material 3 primitives
+- Android-native appearance, not iOS
+- respect window/IME insets
+- 48dp practical touch targets
+- ViewModel owns screen state
+- UI renders state and emits actions
+- extract reusable composables only when reuse/cohesion justifies it
+- avoid direct Supabase/Room/WorkManager logic in composables
+- keep module dependency direction clean
+- avoid unrelated refactors
