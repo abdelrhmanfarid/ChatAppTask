@@ -2,17 +2,17 @@
 
 Branch: `feature/fcm-notifications`. Repository code is authoritative; check `git status` before work.
 
-Required Android implementation and Bonus #1 are complete. Bonus #2 Stage 1B (Firebase Android foundation) is implemented on this branch: Firebase BoM + Messaging, Google Services plugin, FID registration metadata, and a no-op `ChatFirebaseMessagingService.onRegistered`. Backend registration, incoming notifications, and navigation are not started.
+Required Android implementation and Bonus #1 are complete. Bonus #2 Stage 1B (Firebase foundation) and Stage 2 (FID → `register-push` plumbing with local FID cache + startup reconcile) are on this branch. Incoming notifications, webhook/FCM send, and navigation are not started.
 
 ## Modules
 
-- `:app`: application entry point, Material 3 theme, Android/Compose splash, Hilt/WorkManager setup, Firebase Messaging foundation (`ChatFirebaseMessagingService`).
+- `:app`: application entry point, Material 3 theme, Android/Compose splash, Hilt/WorkManager setup, Firebase Messaging (`ChatFirebaseMessagingService` → `PushInstallationRegistrar`).
 - `:core:common`: `UserIdentityStore`; `AndroidIdUserIdentityStore` derives a stable UUID from `Settings.Secure.ANDROID_ID` (no identity DataStore).
 - `:core:ui`: shared Compose UI utilities (`clearFocusOnTap()`, `ChatUiTokens`, optional `rememberHapticAction()`).
 - `:core:domain`: pure Kotlin models and `ChatRepository`/`UserRepository` contracts; `ChatMediaPublicUrlFactory` and `ProfileImagePublicUrlFactory`.
 - `:core:database`: Room database, entities, DAOs, converters, and mappings.
-- `:core:network`: Supabase client, DTOs, mappings, and debug-only Ktor logging.
-- `:data:chat`: Room/Supabase data sources, repositories, DI, and text-send WorkManager flow.
+- `:core:network`: Supabase client (PostgREST, Realtime, Storage, Functions), DTOs (including `RegisterPushRequestDto`), mappings, and debug-only Ktor logging.
+- `:data:chat`: Room/Supabase data sources, repositories, DI, text/media WorkManager send, and FCM FID registration (`PushInstallationRegistrar` / `SupabasePushRegistrationRemoteDataSource`).
 - `:feature:profile`: Profile Setup contract, ViewModel, and Compose UI.
 - `:feature:chat`: Chat contract, ViewModel, and text-chat Compose UI.
 
@@ -72,7 +72,7 @@ Required Android implementation and Bonus #1 are complete. Bonus #2 Stage 1B (Fi
 ## Not Implemented (non-mandatory / bonus or future)
 
 - Full-screen media viewer, video playback, download/save, per-attachment retry UI, and upload byte-progress UI. Photo Picker + composer preview + send handoff + Storage upload + `create_media_message` + Room `SENT` reconciliation + chat bubble rendering are implemented.
-- Bonus #1 visual polish is complete. Bonus #2 Stage 1B Firebase Android foundation is in place (BoM `34.17.0`, Messaging, FID-mode metadata, stub `onRegistered`). Not yet implemented: FID backend registration, Edge Function / webhook push send, incoming-chat notification channel/display, and notification navigation. Other bonuses (voice notes, instrumentation/UI tests) are not started.
+- Bonus #1 visual polish is complete. Bonus #2 Stage 1B–2 Firebase foundation + FID registration plumbing are implemented, including local FID cache and startup reconciliation after an existing/created profile. Not yet: Edge Function / `push_registrations` backend, Database Webhook → FCM HTTP v1 send, incoming-chat notification channel/display, notification navigation. Other bonuses (voice notes, instrumentation/UI tests) are not started.
 - Out of scope unless explicitly required later: Supabase Auth, presence, typing indicators, and read receipts.
 
 ## Working Conventions

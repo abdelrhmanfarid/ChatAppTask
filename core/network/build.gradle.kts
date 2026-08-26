@@ -28,6 +28,7 @@ fun String.toBuildConfigString(): String =
 
 val supabaseUrl = configurationValue("SUPABASE_URL")
 val supabaseAnonKey = configurationValue("SUPABASE_ANON_KEY")
+val supabasePublishableKey = configurationValue("SUPABASE_PUBLISHABLE_KEY")
 
 android {
     namespace = "com.example.chatapptask.core.network"
@@ -40,6 +41,11 @@ android {
 
         buildConfigField("String", "SUPABASE_URL", supabaseUrl.toBuildConfigString())
         buildConfigField("String", "SUPABASE_ANON_KEY", supabaseAnonKey.toBuildConfigString())
+        buildConfigField(
+            "String",
+            "SUPABASE_PUBLISHABLE_KEY",
+            supabasePublishableKey.toBuildConfigString(),
+        )
     }
 
     compileOptions {
@@ -59,6 +65,7 @@ dependencies {
     implementation(libs.supabase.postgrest)
     implementation(libs.supabase.realtime)
     implementation(libs.supabase.storage)
+    implementation(libs.supabase.functions)
     implementation(libs.ktor.client.okhttp)
     debugImplementation(libs.ktor.client.logging)
 

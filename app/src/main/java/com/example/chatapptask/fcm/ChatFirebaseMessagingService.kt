@@ -1,16 +1,21 @@
 package com.example.chatapptask.fcm
 
+import com.example.chatapptask.data.chat.push.PushInstallationRegistrar
 import com.google.firebase.messaging.FirebaseMessagingService
+import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 
 /**
  * FCM entry point for Firebase Installation ID (FID) registration callbacks.
- *
- * Stage 1B: observe [onRegistered] only. Backend upload of the FID is deferred
- * to the next FCM stage.
+ * Caches and uploads the FID through [PushInstallationRegistrar]; does not handle messages.
  */
+@AndroidEntryPoint
 class ChatFirebaseMessagingService : FirebaseMessagingService() {
+    @Inject
+    lateinit var pushInstallationRegistrar: PushInstallationRegistrar
+
     override fun onRegistered(installationId: String) {
-        // Intentionally no-op: do not persist, log, or upload the FID yet.
-        // Backend push-registration is added in the next stage.
+        // Callback runs on a worker thread; cache + schedule IO without blocking here.
+        pushInstallationRegistrar.onRegisteredAsync(installationId)
     }
 }

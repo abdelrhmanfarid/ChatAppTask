@@ -1,6 +1,6 @@
 package com.example.chatapptask.core.network
 
-internal object SupabaseConfig {
+object SupabaseConfig {
     val url: String by lazy {
         requireConfiguredValue(
             name = "SUPABASE_URL",
@@ -8,10 +8,25 @@ internal object SupabaseConfig {
         )
     }
 
+    /**
+     * Legacy JWT-style anon key (`eyJ...`) for the normal Supabase Kotlin client
+     * (PostgREST, Realtime, Storage).
+     */
     val anonKey: String by lazy {
         requireConfiguredValue(
             name = "SUPABASE_ANON_KEY",
             value = BuildConfig.SUPABASE_ANON_KEY,
+        )
+    }
+
+    /**
+     * New-format client-safe publishable key (`sb_publishable_...`) for Edge Function
+     * calls that authenticate via the `apikey` header only (e.g. `register-push`).
+     */
+    val publishableKey: String by lazy {
+        requireConfiguredValue(
+            name = "SUPABASE_PUBLISHABLE_KEY",
+            value = BuildConfig.SUPABASE_PUBLISHABLE_KEY,
         )
     }
 
