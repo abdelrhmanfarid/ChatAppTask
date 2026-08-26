@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -59,6 +60,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.chatapptask.core.ui.ChatUiTokens
 import com.example.chatapptask.core.ui.clearFocusOnTap
 import com.example.chatapptask.feature.profile.R
 import kotlinx.coroutines.Dispatchers
@@ -118,6 +120,7 @@ fun ProfileSetupScreen(
         modifier = modifier
             .fillMaxSize()
             .clearFocusOnTap(),
+        containerColor = MaterialTheme.colorScheme.surface,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         contentWindowInsets = WindowInsets.safeDrawing,
     ) { contentPadding ->
@@ -126,75 +129,58 @@ fun ProfileSetupScreen(
                 .fillMaxSize()
                 .padding(contentPadding)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp, vertical = 32.dp)
+                .padding(
+                    horizontal = ChatUiTokens.ScreenHorizontalPadding,
+                    vertical = ChatUiTokens.ScreenVerticalPadding,
+                )
                 .fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .widthIn(max = 480.dp),
+                    .widthIn(max = ChatUiTokens.ProfileContentMaxWidth),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(
                     text = stringResource(R.string.profile_setup_title),
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
                     textAlign = TextAlign.Center,
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(ChatUiTokens.SpaceSm))
                 Text(
                     text = stringResource(R.string.profile_setup_subtitle),
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
                 )
-                Spacer(Modifier.height(32.dp))
+                Spacer(Modifier.height(ChatUiTokens.SpaceXxl))
 
-                Surface(
-                    onClick = { onAction(ProfileSetupAction.ProfileImageClicked) },
-                    modifier = Modifier
-                        .size(128.dp)
-                        .semantics { contentDescription = addPhotoDescription },
+                ProfileAvatarSelector(
+                    previewBitmap = previewBitmap,
                     enabled = !state.isSaving,
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.secondaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                ) {
-                    if (previewBitmap != null) {
-                        Image(
-                            bitmap = previewBitmap,
-                            contentDescription = addPhotoDescription,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .clip(CircleShape),
-                            contentScale = ContentScale.Crop,
-                        )
-                    } else {
-                        Box(contentAlignment = Alignment.Center) {
-                            Text(
-                                text = "+",
-                                style = MaterialTheme.typography.displayMedium,
-                                fontWeight = FontWeight.Light,
-                            )
-                        }
-                    }
-                }
+                    contentDescription = addPhotoDescription,
+                    onClick = { onAction(ProfileSetupAction.ProfileImageClicked) },
+                )
+                Spacer(Modifier.height(ChatUiTokens.SpaceSm))
                 TextButton(
                     onClick = { onAction(ProfileSetupAction.ProfileImageClicked) },
                     enabled = !state.isSaving,
                 ) {
                     Text(
-                        stringResource(
+                        text = stringResource(
                             if (state.selectedImageUri == null) {
                                 R.string.profile_setup_add_photo
                             } else {
                                 R.string.profile_setup_change_photo
                             },
                         ),
+                        style = MaterialTheme.typography.labelLarge,
                     )
                 }
-                Spacer(Modifier.height(24.dp))
+                Spacer(Modifier.height(ChatUiTokens.SectionSpacing))
 
                 OutlinedTextField(
                     value = state.username,
@@ -205,12 +191,16 @@ fun ProfileSetupScreen(
                     enabled = !state.isSaving,
                     label = { Text(stringResource(R.string.profile_setup_username_label)) },
                     supportingText = {
-                        Text(stringResource(R.string.profile_setup_username_supporting_text))
+                        Text(
+                            text = stringResource(R.string.profile_setup_username_supporting_text),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     },
                     singleLine = true,
+                    shape = MaterialTheme.shapes.medium,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                 )
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(ChatUiTokens.FormFieldSpacing))
 
                 OutlinedTextField(
                     value = state.ageInput,
@@ -219,12 +209,18 @@ fun ProfileSetupScreen(
                     enabled = !state.isSaving,
                     label = { Text(stringResource(R.string.profile_setup_age_label)) },
                     supportingText = if (!state.isAgeValid) {
-                        { Text(stringResource(R.string.profile_setup_age_error)) }
+                        {
+                            Text(
+                                text = stringResource(R.string.profile_setup_age_error),
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
                     } else {
                         null
                     },
                     isError = !state.isAgeValid,
                     singleLine = true,
+                    shape = MaterialTheme.shapes.medium,
                     keyboardOptions = KeyboardOptions(
                         keyboardType = KeyboardType.Number,
                         imeAction = ImeAction.Done,
@@ -233,14 +229,15 @@ fun ProfileSetupScreen(
                         onDone = { focusManager.clearFocus() },
                     ),
                 )
-                Spacer(Modifier.height(28.dp))
+                Spacer(Modifier.height(ChatUiTokens.SpaceXl + ChatUiTokens.SpaceSm))
 
                 Button(
                     onClick = { onAction(ProfileSetupAction.SaveClicked) },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(52.dp),
+                        .height(ChatUiTokens.ProfilePrimaryActionHeight),
                     enabled = state.canSave,
+                    shape = MaterialTheme.shapes.medium,
                 ) {
                     if (state.isSaving) {
                         CircularProgressIndicator(
@@ -248,12 +245,99 @@ fun ProfileSetupScreen(
                             color = MaterialTheme.colorScheme.onPrimary,
                             strokeWidth = 2.dp,
                         )
-                        Spacer(Modifier.size(12.dp))
-                        Text(stringResource(R.string.profile_setup_saving))
+                        Spacer(Modifier.size(ChatUiTokens.SpaceMd))
+                        Text(
+                            text = stringResource(R.string.profile_setup_saving),
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                        )
                     } else {
-                        Text(stringResource(R.string.profile_setup_continue))
+                        Text(
+                            text = stringResource(R.string.profile_setup_continue),
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                        )
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProfileAvatarSelector(
+    previewBitmap: ImageBitmap?,
+    enabled: Boolean,
+    contentDescription: String,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier.size(
+            ChatUiTokens.ProfileAvatarSize + ChatUiTokens.ProfileAvatarBadgeSize / 2,
+        ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Surface(
+            onClick = onClick,
+            modifier = Modifier
+                .size(ChatUiTokens.ProfileAvatarSize)
+                .semantics { this.contentDescription = contentDescription },
+            enabled = enabled,
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.secondaryContainer,
+            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            border = BorderStroke(
+                width = 2.dp,
+                color = MaterialTheme.colorScheme.outlineVariant,
+            ),
+            tonalElevation = 1.dp,
+        ) {
+            if (previewBitmap != null) {
+                Image(
+                    bitmap = previewBitmap,
+                    contentDescription = contentDescription,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(CircleShape),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        text = "+",
+                        style = MaterialTheme.typography.displaySmall,
+                        fontWeight = FontWeight.Light,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                }
+            }
+        }
+        Surface(
+            onClick = onClick,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(ChatUiTokens.SpaceXs)
+                .size(ChatUiTokens.ProfileAvatarBadgeSize),
+            enabled = enabled,
+            shape = CircleShape,
+            color = if (enabled) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+            },
+            contentColor = if (enabled) {
+                MaterialTheme.colorScheme.onPrimary
+            } else {
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+            },
+            shadowElevation = 2.dp,
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Text(
+                    text = "+",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Medium,
+                )
             }
         }
     }
