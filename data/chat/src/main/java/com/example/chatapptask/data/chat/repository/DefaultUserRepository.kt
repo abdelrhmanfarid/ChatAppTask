@@ -27,6 +27,9 @@ class DefaultUserRepository @Inject constructor(
     override fun observeUser(userId: UUID): Flow<User?> =
         localDataSource.observeUserById(userId)
 
+    override fun observeUsers(): Flow<List<User>> =
+        localDataSource.observeUsers()
+
     override suspend fun upsertUser(user: User) {
         val savedUser = remoteDataSource.upsertUser(user)
         localDataSource.upsertUser(savedUser)

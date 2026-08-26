@@ -1,5 +1,12 @@
 # Next Steps
 
-1. Manually verify two-device live Realtime for remote text, media-only, and media+text (no app restart), then commit the media-completion work on `feature/media-messaging` if that check passes.
-2. After that commit, the next product surfaces are the full-screen media viewer, then video playback. Those were out of scope for the media-completion pass.
-3. Add Supabase Auth and FCM only when their product flows are defined. Do not treat FCM as the send-work notification path already implemented.
+Required Android implementation and runtime verification are complete.
+
+1. Finish evaluator/submission documentation on `feature/final-requirements` (root README + backend/workflow accuracy), then promote through `development` → `staging` → `master` as usual.
+2. Before GitHub submission, confirm repository visibility is **Public**.
+3. Next product work is **bonus only** (not mandatory):
+   - exceptional visual polish / delightful interactions
+   - FCM push notifications (separate from the existing WorkManager send notification)
+   - audio / voice messages
+   - instrumentation / UI tests
+4. Optional product surfaces already noted as out of required scope (full-screen media viewer, in-bubble video playback, download/save) remain non-mandatory unless promoted explicitly.

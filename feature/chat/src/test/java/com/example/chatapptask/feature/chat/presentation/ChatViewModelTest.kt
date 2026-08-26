@@ -7,6 +7,7 @@ import com.example.chatapptask.core.domain.model.PendingMedia
 import com.example.chatapptask.core.domain.model.User
 import com.example.chatapptask.core.domain.repository.ChatRepository
 import com.example.chatapptask.core.domain.repository.UserRepository
+import com.example.chatapptask.feature.chat.R
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
@@ -14,7 +15,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
@@ -51,6 +54,86 @@ class ChatViewModelTest {
         advanceUntilIdle()
 
         assertEquals(messages, viewModel.uiState.value.messages)
+        assertTrue(viewModel.uiState.value.hasResolvedLocalMessages)
+    }
+
+    @Test
+    fun localMessages_remainUnresolvedUntilFirstRoomEmission() = runTest(dispatcher) {
+        val repository = FakeChatRepository().apply {
+            messagesGate = CompletableDeferred()
+        }
+        val viewModel = ChatViewModel(repository, FakeUserRepository())
+
+        dispatcher.scheduler.runCurrent()
+
+        assertFalse(viewModel.uiState.value.hasResolvedLocalMessages)
+        assertTrue(viewModel.uiState.value.messages.isEmpty())
+        assertEquals(1, repository.loadLatestCount)
+        assertEquals(1, repository.startRealtimeCount)
+
+        repository.messagesGate!!.complete(Unit)
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.hasResolvedLocalMessages)
+    }
+
+    @Test
+    fun cachedFirstRoomEmission_resolvesLocalMessagesWithoutWaitingForLatestLoad() = runTest(dispatcher) {
+        val cached = listOf(
+            message("00000000-0000-0000-0000-000000000002"),
+            message("00000000-0000-0000-0000-000000000001"),
+        )
+        val repository = FakeChatRepository().apply {
+            messagesGate = CompletableDeferred()
+            loadLatestGate = CompletableDeferred()
+            messages.value = cached
+        }
+        val viewModel = ChatViewModel(repository, FakeUserRepository())
+
+        dispatcher.scheduler.runCurrent()
+        assertFalse(viewModel.uiState.value.hasResolvedLocalMessages)
+
+        repository.messagesGate!!.complete(Unit)
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(cached, viewModel.uiState.value.messages)
+        assertTrue(viewModel.uiState.value.hasResolvedLocalMessages)
+        assertEquals(0, repository.loadLatestCount)
+
+        repository.loadLatestGate!!.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals(1, repository.loadLatestCount)
+        assertEquals(cached, viewModel.uiState.value.messages)
+        assertTrue(viewModel.uiState.value.hasResolvedLocalMessages)
+    }
+
+    @Test
+    fun emptyFirstRoomEmission_resolvesAsGenuineEmptyChat() = runTest(dispatcher) {
+        val repository = FakeChatRepository()
+        val viewModel = ChatViewModel(repository, FakeUserRepository())
+
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.messages.isEmpty())
+        assertTrue(viewModel.uiState.value.hasResolvedLocalMessages)
+    }
+
+    @Test
+    fun laterRoomEmission_updatesMessagesAndKeepsLocalResolution() = runTest(dispatcher) {
+        val repository = FakeChatRepository()
+        val viewModel = ChatViewModel(repository, FakeUserRepository())
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.hasResolvedLocalMessages)
+        assertTrue(viewModel.uiState.value.messages.isEmpty())
+
+        val updated = listOf(message("00000000-0000-0000-0000-000000000010"))
+        repository.messages.value = updated
+        advanceUntilIdle()
+
+        assertEquals(updated, viewModel.uiState.value.messages)
+        assertTrue(viewModel.uiState.value.hasResolvedLocalMessages)
     }
 
     @Test
@@ -173,7 +256,7 @@ class ChatViewModelTest {
         advanceUntilIdle()
 
         assertEquals(
-            ChatEvent.ShowError("media scheduler unavailable"),
+            ChatEvent.ShowError(R.string.chat_error_unexpected, isError = true),
             viewModel.events.first(),
         )
         assertEquals(media, viewModel.uiState.value.selectedAttachments)
@@ -209,7 +292,7 @@ class ChatViewModelTest {
         advanceUntilIdle()
 
         assertEquals(
-            ChatEvent.ShowError("You can attach up to 10 photos or videos."),
+            ChatEvent.ShowError(R.string.chat_attachment_limit, isError = true),
             viewModel.events.first(),
         )
     }
@@ -289,7 +372,7 @@ class ChatViewModelTest {
             advanceUntilIdle()
 
             assertEquals(
-                ChatEvent.ShowError("scheduler unavailable"),
+                ChatEvent.ShowError(R.string.chat_error_unexpected, isError = true),
                 viewModel.events.first(),
             )
             assertEquals("Hello", viewModel.uiState.value.composerText)
@@ -309,6 +392,20 @@ class ChatViewModelTest {
             updatedAt = Instant.parse(createdAt),
             media = emptyList(),
             sendStatus = status,
+        )
+
+    private fun user(
+        id: String,
+        username: String,
+        profileImagePath: String? = null,
+    ): User =
+        User(
+            id = UUID.fromString(id),
+            username = username,
+            profileImagePath = profileImagePath,
+            age = null,
+            createdAt = Instant.parse("2026-08-23T11:00:00Z"),
+            updatedAt = Instant.parse("2026-08-23T11:00:00Z"),
         )
 
     @Test
@@ -344,11 +441,59 @@ class ChatViewModelTest {
         advanceUntilIdle()
 
         assertEquals(
-            ChatEvent.ShowError("network unavailable"),
+            ChatEvent.ShowError(R.string.chat_error_sync, isError = true),
             viewModel.events.first(),
         )
         assertEquals(listOf(existing), viewModel.uiState.value.messages)
+        assertTrue(viewModel.uiState.value.hasResolvedLocalMessages)
     }
+
+    @Test
+    fun latestLoadOfflineFailure_emitsFriendlyOfflineErrorAndKeepsCachedMessages() =
+        runTest(dispatcher) {
+            val existing = message("00000000-0000-0000-0000-000000000001")
+            val raw =
+                "HTTP request to https://xyz.supabase.co/rest/v1/messages failed with message: " +
+                    "Unable to resolve host xyz.supabase.co"
+            val repository = FakeChatRepository().apply {
+                messages.value = listOf(existing)
+                loadLatestFailure = java.net.UnknownHostException(raw)
+            }
+            val viewModel = ChatViewModel(repository, FakeUserRepository())
+
+            advanceUntilIdle()
+
+            val event = viewModel.events.first()
+            assertEquals(
+                ChatEvent.ShowError(R.string.chat_error_offline, isError = true),
+                event,
+            )
+            assertTrue(event is ChatEvent.ShowError && event.isError)
+            assertEquals(listOf(existing), viewModel.uiState.value.messages)
+            assertTrue(viewModel.uiState.value.hasResolvedLocalMessages)
+        }
+
+    @Test
+    fun latestLoadTimeoutFailure_emitsFriendlyTimeoutErrorAndKeepsCachedMessages() =
+        runTest(dispatcher) {
+            val existing = message("00000000-0000-0000-0000-000000000001")
+            val repository = FakeChatRepository().apply {
+                messages.value = listOf(existing)
+                loadLatestFailure = java.net.SocketTimeoutException(
+                    "HTTP request to https://xyz.supabase.co timed out",
+                )
+            }
+            val viewModel = ChatViewModel(repository, FakeUserRepository())
+
+            advanceUntilIdle()
+
+            assertEquals(
+                ChatEvent.ShowError(R.string.chat_error_timeout, isError = true),
+                viewModel.events.first(),
+            )
+            assertEquals(listOf(existing), viewModel.uiState.value.messages)
+            assertTrue(viewModel.uiState.value.hasResolvedLocalMessages)
+        }
 
     @Test
     fun start_startsRealtimeThenLoadsLatest() = runTest(dispatcher) {
@@ -373,7 +518,7 @@ class ChatViewModelTest {
         advanceUntilIdle()
 
         assertEquals(
-            ChatEvent.ShowError("realtime unavailable"),
+            ChatEvent.ShowError(R.string.chat_error_sync, isError = true),
             viewModel.events.first(),
         )
         assertEquals(1, repository.loadLatestCount)
@@ -535,12 +680,81 @@ class ChatViewModelTest {
         advanceUntilIdle()
 
         assertEquals(
-            ChatEvent.ShowError("older page unavailable"),
+            ChatEvent.ShowError(R.string.chat_error_sync, isError = true),
             viewModel.events.first(),
         )
         assertTrue(viewModel.uiState.value.hasMoreOlderMessages)
         assertFalse(viewModel.uiState.value.isLoadingOlder)
         assertEquals(listOf(existing), viewModel.uiState.value.messages)
+    }
+
+    @Test
+    fun observedUsers_areExposedInSendersByIdKeyedByUserId() = runTest(dispatcher) {
+        val first = user(
+            id = "11111111-1111-1111-1111-111111111111",
+            username = "alice",
+        )
+        val second = user(
+            id = "22222222-2222-2222-2222-222222222222",
+            username = "bob",
+        )
+        val userRepository = FakeUserRepository()
+        val viewModel = ChatViewModel(FakeChatRepository(), userRepository)
+
+        userRepository.emitUsers(listOf(first, second))
+        advanceUntilIdle()
+
+        assertEquals(
+            mapOf(first.id to first, second.id to second),
+            viewModel.uiState.value.sendersById,
+        )
+        assertEquals(first, viewModel.uiState.value.sendersById[first.id])
+        assertEquals(second, viewModel.uiState.value.sendersById[second.id])
+    }
+
+    @Test
+    fun subsequentUserEmissions_updateSendersById() = runTest(dispatcher) {
+        val userId = UUID.fromString("11111111-1111-1111-1111-111111111111")
+        val initial = user(id = userId.toString(), username = "alice")
+        val updated = user(id = userId.toString(), username = "alice_updated")
+        val userRepository = FakeUserRepository()
+        val viewModel = ChatViewModel(FakeChatRepository(), userRepository)
+
+        userRepository.emitUsers(listOf(initial))
+        advanceUntilIdle()
+        assertEquals("alice", viewModel.uiState.value.sendersById[userId]?.username)
+
+        userRepository.emitUsers(listOf(updated))
+        advanceUntilIdle()
+        assertEquals("alice_updated", viewModel.uiState.value.sendersById[userId]?.username)
+    }
+
+    @Test
+    fun senderObservation_doesNotDisturbMessageObservation() = runTest(dispatcher) {
+        val messages = listOf(
+            message("00000000-0000-0000-0000-000000000002"),
+            message("00000000-0000-0000-0000-000000000001"),
+        )
+        val sender = user(
+            id = "11111111-1111-1111-1111-111111111111",
+            username = "alice",
+        )
+        val repository = FakeChatRepository()
+        val userRepository = FakeUserRepository()
+        val viewModel = ChatViewModel(repository, userRepository)
+
+        repository.messages.value = messages
+        userRepository.emitUsers(listOf(sender))
+        advanceUntilIdle()
+
+        assertEquals(messages, viewModel.uiState.value.messages)
+        assertEquals(mapOf(sender.id to sender), viewModel.uiState.value.sendersById)
+        assertTrue(viewModel.uiState.value.hasResolvedLocalMessages)
+        assertTrue(viewModel.uiState.value.hasMoreOlderMessages)
+        assertFalse(viewModel.uiState.value.isLoadingOlder)
+        assertFalse(viewModel.uiState.value.isSendRequestInProgress)
+        assertEquals("", viewModel.uiState.value.composerText)
+        assertTrue(viewModel.uiState.value.selectedAttachments.isEmpty())
     }
 }
 
@@ -553,14 +767,26 @@ private class FakeChatRepository : ChatRepository {
     var mediaSendFailure: Exception? = null
     var loadLatestCount = 0
     var loadLatestFailure: Exception? = null
+    var loadLatestGate: CompletableDeferred<Unit>? = null
     var startRealtimeCount = 0
     var startRealtimeFailure: Exception? = null
     var olderLoadCount = 0
     var olderPageSize = 0
     var olderFailure: Exception? = null
     var olderGate: CompletableDeferred<Unit>? = null
+    var messagesGate: CompletableDeferred<Unit>? = null
 
-    override fun observeMessages(): Flow<List<Message>> = messages
+    override fun observeMessages(): Flow<List<Message>> {
+        val gate = messagesGate
+        return if (gate == null) {
+            messages
+        } else {
+            flow {
+                gate.await()
+                emitAll(messages)
+            }
+        }
+    }
 
     override suspend fun sendTextMessage(text: String) {
         sentTexts += text
@@ -574,6 +800,7 @@ private class FakeChatRepository : ChatRepository {
     override suspend fun cancelOutgoingSend(messageId: UUID) = unused()
 
     override suspend fun loadLatestMessages(limit: Int) {
+        loadLatestGate?.await()
         loadLatestCount += 1
         loadLatestFailure?.let { throw it }
     }
@@ -613,12 +840,19 @@ private fun attachment(
 
 private class FakeUserRepository(
     private val currentUserId: UUID = UUID.fromString("33eed91f-846c-49c8-851d-bca519b01432"),
+    private val users: MutableStateFlow<List<User>> = MutableStateFlow(emptyList()),
 ) : UserRepository {
+    fun emitUsers(value: List<User>) {
+        users.value = value
+    }
+
     override suspend fun getCurrentUserId(): UUID = currentUserId
 
     override suspend fun getUser(userId: UUID): User? = unused()
 
     override fun observeUser(userId: UUID): Flow<User?> = unused()
+
+    override fun observeUsers(): Flow<List<User>> = users
 
     override suspend fun upsertUser(user: User) = unused()
 

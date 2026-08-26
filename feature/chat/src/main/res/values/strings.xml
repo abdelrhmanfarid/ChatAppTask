@@ -15,6 +15,11 @@
     <string name="chat_attachment_video_placeholder">Video</string>
     <string name="chat_attachment_unsupported">Some selected items are not supported photos or videos.</string>
     <string name="chat_attachment_too_large">Each photo or video must be 50 MB or smaller.</string>
+    <string name="chat_attachment_limit">You can attach up to 10 photos or videos.</string>
+    <string name="chat_error_offline">You\'re offline. Check your internet connection.</string>
+    <string name="chat_error_timeout">The connection timed out. Please try again.</string>
+    <string name="chat_error_sync">Something went wrong while syncing messages. Please try again.</string>
+    <string name="chat_error_unexpected">Something went wrong. Please try again.</string>
     <string name="chat_sending">Sending…</string>
     <string name="chat_sent">Sent</string>
     <string name="chat_failed">Not sent</string>
@@ -24,4 +29,6 @@
     <string name="chat_message_video">Video</string>
     <string name="chat_message_image_loading">Loading image</string>
     <string name="chat_message_image_unavailable">Image unavailable</string>
+    <string name="chat_sender_unknown">Unknown</string>
+    <string name="chat_sender_avatar">Sender profile photo</string>
 </resources>

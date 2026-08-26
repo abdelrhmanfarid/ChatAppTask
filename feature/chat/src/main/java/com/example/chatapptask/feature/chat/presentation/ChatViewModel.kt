@@ -3,9 +3,11 @@ package com.example.chatapptask.feature.chat.presentation
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.chatapptask.core.domain.ChatMediaPublicUrlFactory
+import com.example.chatapptask.core.domain.ProfileImagePublicUrlFactory
 import com.example.chatapptask.core.domain.model.MessageSendStatus
 import com.example.chatapptask.core.domain.repository.ChatRepository
 import com.example.chatapptask.core.domain.repository.UserRepository
+import com.example.chatapptask.feature.chat.R
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.util.UUID
 import javax.inject.Inject
@@ -23,6 +25,8 @@ class ChatViewModel @Inject constructor(
     private val userRepository: UserRepository,
     private val chatMediaPublicUrlFactory: ChatMediaPublicUrlFactory =
         ChatMediaPublicUrlFactory { null },
+    private val profileImagePublicUrlFactory: ProfileImagePublicUrlFactory =
+        ProfileImagePublicUrlFactory { null },
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
@@ -36,15 +40,26 @@ class ChatViewModel @Inject constructor(
                 val currentUserId = userRepository.getCurrentUserId()
                 _uiState.update { state -> state.copy(currentUserId = currentUserId) }
             } catch (exception: Exception) {
-                eventChannel.send(
-                    ChatEvent.ShowError(exception.message ?: IDENTITY_ERROR_MESSAGE),
-                )
+                eventChannel.send(mappedError(exception, ChatErrorContext.IDENTITY))
             }
         }
 
         viewModelScope.launch {
             chatRepository.observeMessages().collect { messages ->
-                _uiState.update { state -> state.copy(messages = messages) }
+                _uiState.update { state ->
+                    state.copy(
+                        messages = messages,
+                        hasResolvedLocalMessages = true,
+                    )
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            userRepository.observeUsers().collect { users ->
+                _uiState.update { state ->
+                    state.copy(sendersById = users.associateBy { user -> user.id })
+                }
             }
         }
 
@@ -53,9 +68,7 @@ class ChatViewModel @Inject constructor(
                 chatRepository.startRealtimeSync()
             } catch (exception: Exception) {
                 if (exception is kotlinx.coroutines.CancellationException) throw exception
-                eventChannel.send(
-                    ChatEvent.ShowError(exception.message ?: REALTIME_ERROR_MESSAGE),
-                )
+                eventChannel.send(mappedError(exception, ChatErrorContext.REALTIME))
             }
         }
 
@@ -63,15 +76,17 @@ class ChatViewModel @Inject constructor(
             try {
                 chatRepository.loadLatestMessages()
             } catch (exception: Exception) {
-                eventChannel.send(
-                    ChatEvent.ShowError(exception.message ?: LOAD_ERROR_MESSAGE),
-                )
+                if (exception is kotlinx.coroutines.CancellationException) throw exception
+                eventChannel.send(mappedError(exception, ChatErrorContext.SYNC))
             }
         }
     }
 
     internal fun publicChatMediaUrl(storagePath: String): String? =
         chatMediaPublicUrlFactory.publicUrlFor(storagePath)
+
+    internal fun publicProfileImageUrl(profileImagePath: String?): String? =
+        profileImagePublicUrlFactory.publicUrlFor(profileImagePath)
 
     fun onAction(action: ChatAction) {
         when (action) {
@@ -101,7 +116,12 @@ class ChatViewModel @Inject constructor(
         val remaining = uiState.value.remainingAttachmentSlots
         if (remaining <= 0) {
             viewModelScope.launch {
-                eventChannel.send(ChatEvent.ShowError(ATTACHMENT_LIMIT_MESSAGE))
+                eventChannel.send(
+                    ChatEvent.ShowError(
+                        messageRes = R.string.chat_attachment_limit,
+                        isError = true,
+                    ),
+                )
             }
             return
         }
@@ -153,9 +173,7 @@ class ChatViewModel @Inject constructor(
             } catch (exception: Exception) {
                 if (exception is kotlinx.coroutines.CancellationException) throw exception
                 _uiState.update { state -> state.copy(isLoadingOlder = false) }
-                eventChannel.send(
-                    ChatEvent.ShowError(exception.message ?: LOAD_OLDER_ERROR_MESSAGE),
-                )
+                eventChannel.send(mappedError(exception, ChatErrorContext.LOAD_OLDER))
             }
         }
     }
@@ -190,9 +208,7 @@ class ChatViewModel @Inject constructor(
                 }
             } catch (exception: Exception) {
                 _uiState.update { state -> state.copy(isSendRequestInProgress = false) }
-                eventChannel.send(
-                    ChatEvent.ShowError(exception.message ?: SEND_ERROR_MESSAGE),
-                )
+                eventChannel.send(mappedError(exception, ChatErrorContext.SEND))
             }
         }
     }
@@ -217,9 +233,7 @@ class ChatViewModel @Inject constructor(
                 }
             } catch (exception: Exception) {
                 _uiState.update { state -> state.copy(isSendRequestInProgress = false) }
-                eventChannel.send(
-                    ChatEvent.ShowError(exception.message ?: SEND_ERROR_MESSAGE),
-                )
+                eventChannel.send(mappedError(exception, ChatErrorContext.SEND))
             }
         }
     }
@@ -229,21 +243,21 @@ class ChatViewModel @Inject constructor(
             try {
                 chatRepository.retryMessage(messageId)
             } catch (exception: Exception) {
-                eventChannel.send(
-                    ChatEvent.ShowError(exception.message ?: RETRY_ERROR_MESSAGE),
-                )
+                eventChannel.send(mappedError(exception, ChatErrorContext.RETRY))
             }
         }
     }
 
+    private fun mappedError(
+        throwable: Throwable,
+        context: ChatErrorContext,
+    ): ChatEvent.ShowError =
+        ChatEvent.ShowError(
+            messageRes = ChatUiErrorMapper.messageResId(throwable, context),
+            isError = true,
+        )
+
     private companion object {
-        const val SEND_ERROR_MESSAGE = "Unable to schedule the message."
-        const val RETRY_ERROR_MESSAGE = "Unable to schedule the retry."
-        const val IDENTITY_ERROR_MESSAGE = "Unable to identify the current user."
-        const val LOAD_ERROR_MESSAGE = "Unable to load messages."
-        const val LOAD_OLDER_ERROR_MESSAGE = "Unable to load older messages."
-        const val REALTIME_ERROR_MESSAGE = "Unable to start live message updates."
-        const val ATTACHMENT_LIMIT_MESSAGE = "You can attach up to 10 photos or videos."
         const val OLDER_PAGE_SIZE = 20
     }
 }

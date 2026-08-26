@@ -2386,6 +2386,7 @@ private class RecordingLocalDataSource(
     }
     override suspend fun getUserById(userId: UUID): User? = usersById[userId]
     override fun observeUserById(userId: UUID): Flow<User?> = unused()
+    override fun observeUsers(): Flow<List<User>> = unused()
     override suspend fun upsertMessages(messages: List<Message>) {
         upsertedMessagePages += messages
         messages.forEach { message ->

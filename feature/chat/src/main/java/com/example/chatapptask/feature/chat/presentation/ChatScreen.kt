@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,6 +24,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -33,6 +35,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -52,6 +55,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -66,11 +71,17 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
+import coil3.compose.SubcomposeAsyncImage
+import coil3.request.ImageRequest
+import coil3.request.crossfade
+import coil3.size.Dimension
+import coil3.size.Size
 import com.example.chatapptask.core.domain.model.MediaType
 import com.example.chatapptask.core.domain.model.MediaUploadStatus
 import com.example.chatapptask.core.domain.model.Message
 import com.example.chatapptask.core.domain.model.MessageMedia
 import com.example.chatapptask.core.domain.model.MessageSendStatus
+import com.example.chatapptask.core.domain.model.User
 import com.example.chatapptask.core.ui.clearFocusOnTap
 import com.example.chatapptask.feature.chat.R
 import java.time.Instant
@@ -87,6 +98,7 @@ fun ChatRoute(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    var snackbarIsError by remember { mutableStateOf(false) }
     val lifecycleOwner = LocalLifecycleOwner.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -106,6 +118,7 @@ fun ChatRoute(
         }
         if (snackbarMessage != null) {
             scope.launch {
+                snackbarIsError = false
                 snackbarHostState.showSnackbar(snackbarMessage)
             }
         }
@@ -125,7 +138,10 @@ fun ChatRoute(
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             viewModel.events.collect { event ->
                 when (event) {
-                    is ChatEvent.ShowError -> snackbarHostState.showSnackbar(event.message)
+                    is ChatEvent.ShowError -> {
+                        snackbarIsError = event.isError
+                        snackbarHostState.showSnackbar(context.getString(event.messageRes))
+                    }
                     is ChatEvent.OpenMediaPicker -> {
                         val request = PickVisualMediaRequest(
                             ActivityResultContracts.PickVisualMedia.ImageAndVideo,
@@ -145,7 +161,9 @@ fun ChatRoute(
         state = state,
         onAction = viewModel::onAction,
         snackbarHostState = snackbarHostState,
+        snackbarIsError = snackbarIsError,
         chatMediaPublicUrl = viewModel::publicChatMediaUrl,
+        profileImagePublicUrl = viewModel::publicProfileImageUrl,
         modifier = modifier,
     )
 }
@@ -157,7 +175,9 @@ fun ChatScreen(
     onAction: (ChatAction) -> Unit,
     snackbarHostState: SnackbarHostState,
     modifier: Modifier = Modifier,
+    snackbarIsError: Boolean = false,
     chatMediaPublicUrl: (String) -> String? = { null },
+    profileImagePublicUrl: (String?) -> String? = { null },
 ) {
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -192,7 +212,20 @@ fun ChatScreen(
                 modifier = Modifier.imePadding(),
             )
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = {
+            SnackbarHost(snackbarHostState) { data ->
+                if (snackbarIsError) {
+                    Snackbar(
+                        snackbarData = data,
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError,
+                        actionContentColor = MaterialTheme.colorScheme.onError,
+                    )
+                } else {
+                    Snackbar(snackbarData = data)
+                }
+            }
+        },
     ) { contentPadding ->
         val listState = rememberLazyListState()
         val newestMessage = state.messages.firstOrNull()
@@ -246,32 +279,49 @@ fun ChatScreen(
                 .padding(contentPadding)
                 .clearFocusOnTap(),
         ) {
-            if (state.messages.isEmpty()) {
-                EmptyChatState(modifier = Modifier.fillMaxSize())
-            } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    state = listState,
-                    reverseLayout = true,
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(
-                        items = state.messages,
-                        key = { message -> message.id },
-                    ) { message ->
-                        MessageBubble(
-                            message = message,
-                            isOutgoing = state.currentUserId == message.senderId,
-                            onRetry = { onAction(ChatAction.RetryMessage(message.id)) },
-                            chatMediaPublicUrl = chatMediaPublicUrl,
+            when {
+                !state.hasResolvedLocalMessages -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
                         )
                     }
-                    if (state.isLoadingOlder) {
-                        item(key = OLDER_LOADING_ITEM_KEY) {
-                            OlderMessagesLoadingIndicator(
-                                modifier = Modifier.fillMaxWidth(),
+                }
+                state.messages.isEmpty() -> {
+                    EmptyChatState(modifier = Modifier.fillMaxSize())
+                }
+                else -> {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        state = listState,
+                        reverseLayout = true,
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        items(
+                            items = state.messages,
+                            key = { message -> message.id },
+                        ) { message ->
+                            val sender = state.sendersById[message.senderId]
+                            MessageBubble(
+                                message = message,
+                                isOutgoing = state.currentUserId == message.senderId,
+                                senderUsername = sender?.username,
+                                senderAvatarUrl = profileImagePublicUrl(sender?.profileImagePath),
+                                onRetry = { onAction(ChatAction.RetryMessage(message.id)) },
+                                chatMediaPublicUrl = chatMediaPublicUrl,
                             )
+                        }
+                        if (state.isLoadingOlder) {
+                            item(key = OLDER_LOADING_ITEM_KEY) {
+                                OlderMessagesLoadingIndicator(
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
                         }
                     }
                 }
@@ -286,6 +336,8 @@ fun MessageBubble(
     isOutgoing: Boolean,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
+    senderUsername: String? = null,
+    senderAvatarUrl: String? = null,
     chatMediaPublicUrl: (String) -> String? = { null },
 ) {
     val bubbleColor = if (isOutgoing) {
@@ -307,57 +359,153 @@ fun MessageBubble(
         messageMediaItemsForDisplay(message, chatMediaPublicUrl)
     }
     val text = message.textContent?.takeIf(String::isNotBlank)
+    val displayName = senderUsername?.takeIf(String::isNotBlank)
+        ?: stringResource(R.string.chat_sender_unknown)
 
     Row(
         modifier = modifier.fillMaxWidth(),
         horizontalArrangement = if (isOutgoing) Arrangement.End else Arrangement.Start,
+        verticalAlignment = Alignment.Bottom,
     ) {
-        Surface(
+        if (!isOutgoing) {
+            MessageSenderAvatar(
+                avatarUrl = senderAvatarUrl,
+                modifier = Modifier.padding(end = 8.dp),
+            )
+        }
+        Column(
+            horizontalAlignment = if (isOutgoing) Alignment.End else Alignment.Start,
             modifier = Modifier.widthIn(max = 320.dp),
-            shape = bubbleShape,
-            color = bubbleColor,
-            contentColor = contentColor,
-            tonalElevation = if (isOutgoing) 0.dp else 1.dp,
         ) {
-            Column(
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            Text(
+                text = displayName,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 4.dp, start = 4.dp, end = 4.dp),
+            )
+            Surface(
+                shape = bubbleShape,
+                color = bubbleColor,
+                contentColor = contentColor,
+                tonalElevation = if (isOutgoing) 0.dp else 1.dp,
             ) {
-                if (mediaItems.isNotEmpty()) {
-                    MessageMediaContent(items = mediaItems)
-                }
-                if (text != null) {
-                    Text(
-                        text = text,
-                        style = MaterialTheme.typography.bodyLarge,
-                        modifier = if (mediaItems.isNotEmpty()) {
-                            Modifier.padding(top = 8.dp)
-                        } else {
-                            Modifier
-                        },
-                    )
-                }
-                Row(
-                    modifier = Modifier
-                        .align(Alignment.End)
-                        .padding(top = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                Column(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                 ) {
-                    Text(
-                        text = message.createdAt.toDisplayTime(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = contentColor.copy(alpha = 0.72f),
-                    )
-                    if (isOutgoing) {
-                        MessageSendState(
-                            status = message.sendStatus,
-                            onRetry = onRetry,
+                    if (mediaItems.isNotEmpty()) {
+                        MessageMediaContent(items = mediaItems)
+                    }
+                    if (text != null) {
+                        Text(
+                            text = text,
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = if (mediaItems.isNotEmpty()) {
+                                Modifier.padding(top = 8.dp)
+                            } else {
+                                Modifier
+                            },
                         )
+                    }
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.End)
+                            .padding(top = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            text = message.createdAt.toDisplayTime(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = contentColor.copy(alpha = 0.72f),
+                        )
+                        if (isOutgoing) {
+                            MessageSendState(
+                                status = message.sendStatus,
+                                onRetry = onRetry,
+                            )
+                        }
                     }
                 }
             }
         }
+        if (isOutgoing) {
+            MessageSenderAvatar(
+                avatarUrl = senderAvatarUrl,
+                modifier = Modifier.padding(start = 8.dp),
+            )
+        }
     }
+}
+
+@Composable
+private fun MessageSenderAvatar(
+    avatarUrl: String?,
+    modifier: Modifier = Modifier,
+) {
+    val avatarDescription = stringResource(R.string.chat_sender_avatar)
+    val placeholderColor = MaterialTheme.colorScheme.secondaryContainer
+    val placeholderContentColor = MaterialTheme.colorScheme.onSecondaryContainer
+
+    if (avatarUrl.isNullOrBlank()) {
+        Box(
+            modifier = modifier
+                .size(SenderAvatarSize)
+                .clip(CircleShape)
+                .background(placeholderColor)
+                .semantics { contentDescription = avatarDescription },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = SENDER_AVATAR_PLACEHOLDER_GLYPH,
+                style = MaterialTheme.typography.labelLarge,
+                color = placeholderContentColor,
+            )
+        }
+        return
+    }
+
+    val context = LocalContext.current
+    SubcomposeAsyncImage(
+        model = ImageRequest.Builder(context)
+            .data(avatarUrl)
+            .size(Size(Dimension.Pixels(SenderAvatarDecodeSize), Dimension.Pixels(SenderAvatarDecodeSize)))
+            .crossfade(true)
+            .build(),
+        contentDescription = avatarDescription,
+        modifier = modifier
+            .size(SenderAvatarSize)
+            .clip(CircleShape),
+        contentScale = ContentScale.Crop,
+        loading = {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(placeholderColor),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(14.dp),
+                    strokeWidth = 1.5.dp,
+                    color = placeholderContentColor,
+                )
+            }
+        },
+        error = {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(placeholderColor),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = SENDER_AVATAR_PLACEHOLDER_GLYPH,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = placeholderContentColor,
+                )
+            }
+        },
+    )
 }
 
 @Composable
@@ -521,6 +669,9 @@ private fun EmptyChatState(modifier: Modifier = Modifier) {
 
 private const val OLDER_LOADING_ITEM_KEY = "older-messages-loading"
 private const val NEAR_NEWEST_ITEM_INDEX = 1
+private val SenderAvatarSize = 32.dp
+private const val SenderAvatarDecodeSize = 96
+private const val SENDER_AVATAR_PLACEHOLDER_GLYPH = "?"
 
 internal fun shouldScrollToOutgoingOptimisticMessage(
     previousNewestMessageId: UUID?,
@@ -553,6 +704,17 @@ private val previewOtherUserId = UUID.fromString("44eed91f-846c-49c8-851d-bca519
 
 private val previewState = ChatUiState(
     currentUserId = previewCurrentUserId,
+    hasResolvedLocalMessages = true,
+    sendersById = mapOf(
+        previewCurrentUserId to previewUser(
+            id = previewCurrentUserId,
+            username = "You",
+        ),
+        previewOtherUserId to previewUser(
+            id = previewOtherUserId,
+            username = "Alex",
+        ),
+    ),
     selectedAttachments = listOf(
         ComposerAttachment(
             uri = "content://preview/image-1",
@@ -645,6 +807,18 @@ private fun previewMessage(
     updatedAt = Instant.parse(createdAt),
     media = media,
     sendStatus = status,
+)
+
+private fun previewUser(
+    id: UUID,
+    username: String,
+): User = User(
+    id = id,
+    username = username,
+    profileImagePath = null,
+    age = null,
+    createdAt = Instant.parse("2026-08-24T09:00:00Z"),
+    updatedAt = Instant.parse("2026-08-24T09:00:00Z"),
 )
 
 private fun previewMedia(
