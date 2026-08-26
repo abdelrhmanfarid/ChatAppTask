@@ -1,10 +1,12 @@
 # Next Steps
 
-Required Android implementation and Bonus #1 are complete. Bonus #2 Android stages (Firebase foundation, FID registration/reconciliation, incoming-chat notifications + tap → Chat) are on `feature/fcm-notifications`.
+Required Android implementation, Bonus #1 (visual polish), and Bonus #2 (FCM, including Database Webhook → `send-chat-push` → FCM) are complete.
 
-1. Implement/deploy remaining Supabase push backend if needed: Database Webhook → Edge Function → FCM HTTP v1 **data-only** send using the Android contract (`type`, `schema_version`, `message_id`, `sender_id`, `sender_username`, `preview_kind`, `preview_text`). Confirm `register-push` / `push_registrations` remain healthy.
-2. Manually verify on two devices: background notification, foreground Chat suppression, foreground non-Chat allow, self-sender suppression, permission denied = no crash/no post, notification tap cold start → startup → Chat, duplicate `message_id` replaces same notification, multiple incoming messages collapse under one expandable group with “N new messages” summary (Samsung/Android shade).
-3. Run focused JVM tests: `:app:testDebugUnitTest --tests "com.example.chatapptask.fcm.*"`.
-4. Finish evaluator/submission documentation if needed, then promote through `development` → `staging` → `master` as usual.
-5. Before GitHub submission, confirm repository visibility is **Public**.
-6. Optional out-of-scope surfaces (full-screen media viewer, in-bubble video playback, download/save) remain non-mandatory unless promoted explicitly.
+Voice notes/audio and product instrumentation/UI tests are not implemented.
+
+1. Confirm GitHub repository visibility is **Public**.
+2. Confirm `local.properties`, `app/google-services.json`, and Firebase service-account JSON are not committed.
+3. Promote through `development` → `staging` → `master` if this branch is not yet on `master`.
+4. Share the public repository link with the recruiter.
+
+Optional out-of-scope surfaces (full-screen media viewer, in-bubble video playback, download/save) remain non-mandatory unless promoted explicitly.
