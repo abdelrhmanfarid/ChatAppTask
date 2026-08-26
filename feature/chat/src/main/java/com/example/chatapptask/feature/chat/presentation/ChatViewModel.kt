@@ -47,7 +47,12 @@ class ChatViewModel @Inject constructor(
 
         viewModelScope.launch {
             chatRepository.observeMessages().collect { messages ->
-                _uiState.update { state -> state.copy(messages = messages) }
+                _uiState.update { state ->
+                    state.copy(
+                        messages = messages,
+                        hasResolvedLocalMessages = true,
+                    )
+                }
             }
         }
 

@@ -14,7 +14,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
@@ -51,6 +53,86 @@ class ChatViewModelTest {
         advanceUntilIdle()
 
         assertEquals(messages, viewModel.uiState.value.messages)
+        assertTrue(viewModel.uiState.value.hasResolvedLocalMessages)
+    }
+
+    @Test
+    fun localMessages_remainUnresolvedUntilFirstRoomEmission() = runTest(dispatcher) {
+        val repository = FakeChatRepository().apply {
+            messagesGate = CompletableDeferred()
+        }
+        val viewModel = ChatViewModel(repository, FakeUserRepository())
+
+        dispatcher.scheduler.runCurrent()
+
+        assertFalse(viewModel.uiState.value.hasResolvedLocalMessages)
+        assertTrue(viewModel.uiState.value.messages.isEmpty())
+        assertEquals(1, repository.loadLatestCount)
+        assertEquals(1, repository.startRealtimeCount)
+
+        repository.messagesGate!!.complete(Unit)
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.hasResolvedLocalMessages)
+    }
+
+    @Test
+    fun cachedFirstRoomEmission_resolvesLocalMessagesWithoutWaitingForLatestLoad() = runTest(dispatcher) {
+        val cached = listOf(
+            message("00000000-0000-0000-0000-000000000002"),
+            message("00000000-0000-0000-0000-000000000001"),
+        )
+        val repository = FakeChatRepository().apply {
+            messagesGate = CompletableDeferred()
+            loadLatestGate = CompletableDeferred()
+            messages.value = cached
+        }
+        val viewModel = ChatViewModel(repository, FakeUserRepository())
+
+        dispatcher.scheduler.runCurrent()
+        assertFalse(viewModel.uiState.value.hasResolvedLocalMessages)
+
+        repository.messagesGate!!.complete(Unit)
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(cached, viewModel.uiState.value.messages)
+        assertTrue(viewModel.uiState.value.hasResolvedLocalMessages)
+        assertEquals(0, repository.loadLatestCount)
+
+        repository.loadLatestGate!!.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals(1, repository.loadLatestCount)
+        assertEquals(cached, viewModel.uiState.value.messages)
+        assertTrue(viewModel.uiState.value.hasResolvedLocalMessages)
+    }
+
+    @Test
+    fun emptyFirstRoomEmission_resolvesAsGenuineEmptyChat() = runTest(dispatcher) {
+        val repository = FakeChatRepository()
+        val viewModel = ChatViewModel(repository, FakeUserRepository())
+
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.messages.isEmpty())
+        assertTrue(viewModel.uiState.value.hasResolvedLocalMessages)
+    }
+
+    @Test
+    fun laterRoomEmission_updatesMessagesAndKeepsLocalResolution() = runTest(dispatcher) {
+        val repository = FakeChatRepository()
+        val viewModel = ChatViewModel(repository, FakeUserRepository())
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.hasResolvedLocalMessages)
+        assertTrue(viewModel.uiState.value.messages.isEmpty())
+
+        val updated = listOf(message("00000000-0000-0000-0000-000000000010"))
+        repository.messages.value = updated
+        advanceUntilIdle()
+
+        assertEquals(updated, viewModel.uiState.value.messages)
+        assertTrue(viewModel.uiState.value.hasResolvedLocalMessages)
     }
 
     @Test
@@ -618,6 +700,7 @@ class ChatViewModelTest {
 
         assertEquals(messages, viewModel.uiState.value.messages)
         assertEquals(mapOf(sender.id to sender), viewModel.uiState.value.sendersById)
+        assertTrue(viewModel.uiState.value.hasResolvedLocalMessages)
         assertTrue(viewModel.uiState.value.hasMoreOlderMessages)
         assertFalse(viewModel.uiState.value.isLoadingOlder)
         assertFalse(viewModel.uiState.value.isSendRequestInProgress)
@@ -635,14 +718,26 @@ private class FakeChatRepository : ChatRepository {
     var mediaSendFailure: Exception? = null
     var loadLatestCount = 0
     var loadLatestFailure: Exception? = null
+    var loadLatestGate: CompletableDeferred<Unit>? = null
     var startRealtimeCount = 0
     var startRealtimeFailure: Exception? = null
     var olderLoadCount = 0
     var olderPageSize = 0
     var olderFailure: Exception? = null
     var olderGate: CompletableDeferred<Unit>? = null
+    var messagesGate: CompletableDeferred<Unit>? = null
 
-    override fun observeMessages(): Flow<List<Message>> = messages
+    override fun observeMessages(): Flow<List<Message>> {
+        val gate = messagesGate
+        return if (gate == null) {
+            messages
+        } else {
+            flow {
+                gate.await()
+                emitAll(messages)
+            }
+        }
+    }
 
     override suspend fun sendTextMessage(text: String) {
         sentTexts += text
@@ -656,6 +751,7 @@ private class FakeChatRepository : ChatRepository {
     override suspend fun cancelOutgoingSend(messageId: UUID) = unused()
 
     override suspend fun loadLatestMessages(limit: Int) {
+        loadLatestGate?.await()
         loadLatestCount += 1
         loadLatestFailure?.let { throw it }
     }

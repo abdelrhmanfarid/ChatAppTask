@@ -258,35 +258,49 @@ fun ChatScreen(
                 .padding(contentPadding)
                 .clearFocusOnTap(),
         ) {
-            if (state.messages.isEmpty()) {
-                EmptyChatState(modifier = Modifier.fillMaxSize())
-            } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    state = listState,
-                    reverseLayout = true,
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(
-                        items = state.messages,
-                        key = { message -> message.id },
-                    ) { message ->
-                        val sender = state.sendersById[message.senderId]
-                        MessageBubble(
-                            message = message,
-                            isOutgoing = state.currentUserId == message.senderId,
-                            senderUsername = sender?.username,
-                            senderAvatarUrl = profileImagePublicUrl(sender?.profileImagePath),
-                            onRetry = { onAction(ChatAction.RetryMessage(message.id)) },
-                            chatMediaPublicUrl = chatMediaPublicUrl,
+            when {
+                !state.hasResolvedLocalMessages -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
                         )
                     }
-                    if (state.isLoadingOlder) {
-                        item(key = OLDER_LOADING_ITEM_KEY) {
-                            OlderMessagesLoadingIndicator(
-                                modifier = Modifier.fillMaxWidth(),
+                }
+                state.messages.isEmpty() -> {
+                    EmptyChatState(modifier = Modifier.fillMaxSize())
+                }
+                else -> {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        state = listState,
+                        reverseLayout = true,
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        items(
+                            items = state.messages,
+                            key = { message -> message.id },
+                        ) { message ->
+                            val sender = state.sendersById[message.senderId]
+                            MessageBubble(
+                                message = message,
+                                isOutgoing = state.currentUserId == message.senderId,
+                                senderUsername = sender?.username,
+                                senderAvatarUrl = profileImagePublicUrl(sender?.profileImagePath),
+                                onRetry = { onAction(ChatAction.RetryMessage(message.id)) },
+                                chatMediaPublicUrl = chatMediaPublicUrl,
                             )
+                        }
+                        if (state.isLoadingOlder) {
+                            item(key = OLDER_LOADING_ITEM_KEY) {
+                                OlderMessagesLoadingIndicator(
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
                         }
                     }
                 }
@@ -669,6 +683,7 @@ private val previewOtherUserId = UUID.fromString("44eed91f-846c-49c8-851d-bca519
 
 private val previewState = ChatUiState(
     currentUserId = previewCurrentUserId,
+    hasResolvedLocalMessages = true,
     sendersById = mapOf(
         previewCurrentUserId to previewUser(
             id = previewCurrentUserId,

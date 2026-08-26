@@ -31,6 +31,11 @@ data class ComposerAttachment(
 
 data class ChatUiState(
     val messages: List<Message> = emptyList(),
+    /**
+     * True after Room message observation has produced its first local emission.
+     * Distinguishes unresolved startup from a genuinely empty conversation.
+     */
+    val hasResolvedLocalMessages: Boolean = false,
     val sendersById: Map<UUID, User> = emptyMap(),
     val currentUserId: UUID? = null,
     val composerText: String = "",
