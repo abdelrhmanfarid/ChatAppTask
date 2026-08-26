@@ -6,6 +6,8 @@ import com.example.chatapptask.core.domain.model.MessageMedia
 import com.example.chatapptask.core.domain.model.User
 import com.example.chatapptask.core.network.dto.MessageDto
 import com.example.chatapptask.core.network.dto.MessageMediaDto
+import com.example.chatapptask.core.network.dto.RealtimeMessageIdDto
+import com.example.chatapptask.core.network.dto.RealtimeMessageMediaMessageIdDto
 import com.example.chatapptask.core.network.dto.UserDto
 import com.example.chatapptask.core.network.mapper.createMediaMessageParams
 import com.example.chatapptask.core.network.mapper.createTextMessageInsertDto
@@ -16,11 +18,19 @@ import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Order
 import io.github.jan.supabase.postgrest.rpc
+import io.github.jan.supabase.realtime.PostgresAction
+import io.github.jan.supabase.realtime.channel
+import io.github.jan.supabase.realtime.decodeRecord
+import io.github.jan.supabase.realtime.postgresChangeFlow
 import io.github.jan.supabase.storage.storage
 import io.ktor.http.ContentType
 import java.time.Instant
 import java.util.UUID
 import javax.inject.Inject
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.launch
 
 class SupabaseChatRemoteDataSource @Inject constructor(
     private val supabaseClient: SupabaseClient,
@@ -45,6 +55,50 @@ class SupabaseChatRemoteDataSource @Inject constructor(
             }
             .decodeSingleOrNull<UserDto>()
             ?.toDomain()
+
+    override suspend fun getMessage(messageId: UUID): Message? {
+        val message = supabaseClient
+            .from(MESSAGES_TABLE)
+            .select {
+                filter {
+                    eq("id", messageId.toString())
+                }
+                limit(1)
+            }
+            .decodeSingleOrNull<MessageDto>()
+            ?: return null
+        val media = getMediaForMessages(listOf(messageId))
+        return message.toDomain(media)
+    }
+
+    override fun observeRemoteMessageIds(): Flow<UUID> = channelFlow {
+        val channel = supabaseClient.channel(MESSAGES_REALTIME_CHANNEL)
+        val messageChanges = channel.postgresChangeFlow<PostgresAction>(schema = PUBLIC_SCHEMA) {
+            table = MESSAGES_TABLE
+        }
+        val mediaChanges = channel.postgresChangeFlow<PostgresAction>(schema = PUBLIC_SCHEMA) {
+            table = MESSAGE_MEDIA_TABLE
+        }
+        val collector = launch {
+            launch {
+                messageChanges.collect { action ->
+                    messageIdOf(action)?.let { send(it) }
+                }
+            }
+            launch {
+                mediaChanges.collect { action ->
+                    messageIdFromMedia(action)?.let { send(it) }
+                }
+            }
+        }
+        try {
+            channel.subscribe(blockUntilSubscribed = true)
+            awaitCancellation()
+        } finally {
+            collector.cancel()
+            runCatching { channel.unsubscribe() }
+        }
+    }
 
     override suspend fun getLatestMessages(limit: Int): List<Message> {
         requirePositiveLimit(limit)
@@ -140,10 +194,31 @@ class SupabaseChatRemoteDataSource @Inject constructor(
     ): String {
         val normalizedExtension = normalizeExtension(extension)
         val storagePath = "$messageId/$mediaId.$normalizedExtension"
+        // Deterministic `{messageId}/{mediaId}.{ext}` retry: overwrite the same object if
+        // Storage succeeded but Room never recorded UPLOADED. Same pattern as profile avatars.
         supabaseClient.storage[CHAT_MEDIA_BUCKET].upload(
             path = storagePath,
             data = bytes,
         ) {
+            upsert = true
+            contentType = ContentType.parse(mimeType)
+        }
+        return storagePath
+    }
+
+    override suspend fun uploadProfileImage(
+        userId: UUID,
+        bytes: ByteArray,
+        mimeType: String,
+        fileExtension: String,
+    ): String {
+        val normalizedExtension = normalizeExtension(fileExtension)
+        val storagePath = "$userId/avatar.$normalizedExtension"
+        supabaseClient.storage[PROFILE_IMAGES_BUCKET].upload(
+            path = storagePath,
+            data = bytes,
+        ) {
+            upsert = true
             contentType = ContentType.parse(mimeType)
         }
         return storagePath
@@ -151,21 +226,6 @@ class SupabaseChatRemoteDataSource @Inject constructor(
 
     override suspend fun deleteChatMediaObject(storagePath: String) {
         supabaseClient.storage[CHAT_MEDIA_BUCKET].delete(validateChatMediaPath(storagePath))
-    }
-
-    private suspend fun getMessage(messageId: UUID): Message? {
-        val message = supabaseClient
-            .from(MESSAGES_TABLE)
-            .select {
-                filter {
-                    eq("id", messageId.toString())
-                }
-                limit(1)
-            }
-            .decodeSingleOrNull<MessageDto>()
-            ?: return null
-        val media = getMediaForMessages(listOf(messageId))
-        return message.toDomain(media)
     }
 
     private suspend fun mapMessagesWithMedia(messages: List<MessageDto>): List<Message> {
@@ -220,6 +280,30 @@ class SupabaseChatRemoteDataSource @Inject constructor(
         return normalized
     }
 
+    private fun messageIdOf(action: PostgresAction): UUID? =
+        try {
+            val id = when (action) {
+                is PostgresAction.Insert -> action.decodeRecord<RealtimeMessageIdDto>().id
+                is PostgresAction.Update -> action.decodeRecord<RealtimeMessageIdDto>().id
+                is PostgresAction.Delete, is PostgresAction.Select -> return null
+            }
+            UUID.fromString(id)
+        } catch (_: Exception) {
+            null
+        }
+
+    private fun messageIdFromMedia(action: PostgresAction): UUID? =
+        try {
+            val messageId = when (action) {
+                is PostgresAction.Insert -> action.decodeRecord<RealtimeMessageMediaMessageIdDto>().messageId
+                is PostgresAction.Update -> action.decodeRecord<RealtimeMessageMediaMessageIdDto>().messageId
+                is PostgresAction.Delete, is PostgresAction.Select -> return null
+            }
+            UUID.fromString(messageId)
+        } catch (_: Exception) {
+            null
+        }
+
     private fun String.toUuidOrThrow(message: String): UUID =
         try {
             UUID.fromString(this)
@@ -231,8 +315,11 @@ class SupabaseChatRemoteDataSource @Inject constructor(
         const val USERS_TABLE = "users"
         const val MESSAGES_TABLE = "messages"
         const val MESSAGE_MEDIA_TABLE = "message_media"
+        const val MESSAGES_REALTIME_CHANNEL = "public:messages"
+        const val PUBLIC_SCHEMA = "public"
         const val CREATE_MEDIA_MESSAGE_RPC = "create_media_message"
         const val CHAT_MEDIA_BUCKET = "chat-media"
+        const val PROFILE_IMAGES_BUCKET = "profile-images"
 
         val FILE_EXTENSION_PATTERN = Regex("[a-z0-9]+")
     }

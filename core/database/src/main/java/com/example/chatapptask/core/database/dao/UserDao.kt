@@ -20,4 +20,7 @@ interface UserDao {
 
     @Query("SELECT * FROM users WHERE id = :userId LIMIT 1")
     fun observeUserById(userId: UUID): Flow<UserEntity?>
+
+    @Query("SELECT * FROM users")
+    fun observeUsers(): Flow<List<UserEntity>>
 }

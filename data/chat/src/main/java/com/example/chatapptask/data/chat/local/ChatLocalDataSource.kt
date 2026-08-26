@@ -18,7 +18,11 @@ interface ChatLocalDataSource {
 
     fun observeUserById(userId: UUID): Flow<User?>
 
+    fun observeUsers(): Flow<List<User>>
+
     suspend fun upsertMessage(message: Message)
+
+    suspend fun deleteMessage(messageId: UUID)
 
     suspend fun upsertMessages(messages: List<Message>)
 
@@ -34,16 +38,21 @@ interface ChatLocalDataSource {
         limit: Int,
     ): List<Message>
 
-    suspend fun updateMessageSendState(
+    suspend fun beginMessageSendAttempt(messageId: UUID)
+
+    suspend fun markMessageSendFailed(messageId: UUID, lastError: String?)
+
+    suspend fun reconcileSentMessage(
         messageId: UUID,
-        status: MessageSendStatus,
-        attemptCount: Int,
-        lastError: String?,
+        createdAt: Instant,
+        updatedAt: Instant,
     )
 
     suspend fun getMessagesByStatuses(
         statuses: List<MessageSendStatus>,
     ): List<Message>
+
+    suspend fun getOldestMessageBySendStatus(status: MessageSendStatus): Message?
 
     suspend fun upsertMedia(media: MessageMedia)
 
@@ -54,6 +63,8 @@ interface ChatLocalDataSource {
     suspend fun getMediaForMessages(messageIds: List<UUID>): List<MessageMedia>
 
     fun observeMediaForMessage(messageId: UUID): Flow<List<MessageMedia>>
+
+    suspend fun beginMediaUploadAttempt(mediaId: UUID)
 
     suspend fun updateMediaUploadProgress(
         mediaId: UUID,
@@ -68,7 +79,6 @@ interface ChatLocalDataSource {
 
     suspend fun markMediaUploadFailed(
         mediaId: UUID,
-        attemptCount: Int,
         error: String?,
     )
 
