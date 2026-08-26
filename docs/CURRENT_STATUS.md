@@ -2,11 +2,11 @@
 
 Branch: `feature/fcm-notifications`. Repository code is authoritative; check `git status` before work.
 
-Required Android implementation and Bonus #1 are complete. Bonus #2 Stage 1B (Firebase foundation) and Stage 2 (FID → `register-push` plumbing with local FID cache + startup reconcile) are on this branch. Incoming notifications, webhook/FCM send, and navigation are not started.
+Required Android implementation and Bonus #1 are complete. Bonus #2 Stage 1B–2 (Firebase foundation + FID registration) and Android incoming-chat FCM notification display/navigation are on this branch. Backend Database Webhook → FCM HTTP v1 send remains separate.
 
 ## Modules
 
-- `:app`: application entry point, Material 3 theme, Android/Compose splash, Hilt/WorkManager setup, Firebase Messaging (`ChatFirebaseMessagingService` → `PushInstallationRegistrar`).
+- `:app`: application entry point, Material 3 theme, Android/Compose splash, Hilt/WorkManager setup, Firebase Messaging (`ChatFirebaseMessagingService` → FID registration + data-only incoming chat notifications via `ChatIncomingNotifications`).
 - `:core:common`: `UserIdentityStore`; `AndroidIdUserIdentityStore` derives a stable UUID from `Settings.Secure.ANDROID_ID` (no identity DataStore).
 - `:core:ui`: shared Compose UI utilities (`clearFocusOnTap()`, `ChatUiTokens`, optional `rememberHapticAction()`).
 - `:core:domain`: pure Kotlin models and `ChatRepository`/`UserRepository` contracts; `ChatMediaPublicUrlFactory` and `ProfileImagePublicUrlFactory`.
@@ -67,12 +67,13 @@ Required Android implementation and Bonus #1 are complete. Bonus #2 Stage 1B (Fi
 - Selected attachments are temporary composer state only (not Room-persisted). Durable copies remain repository-owned after Send.
 - Messages remain newest-to-oldest in state; `LazyColumn(reverseLayout = true)` puts the newest item at the visual bottom with UUID keys.
 - Outgoing bubbles show `SENDING`, `SENT`, or `FAILED`; failed messages retry through `ChatAction.RetryMessage`. `ChatRepository.retryMessage` routes by persisted type: text-only rows reuse unique work `send-text-message:<UUID>` (`REPLACE`); media rows (including media + optional text) reuse unique work `send-media-message:<UUID>` (`REPLACE`) without creating a new Room message. Already `UPLOADED` attachments and their storage paths are left unchanged until the existing media worker runs.
-- `MainActivity` hosts `ChatAppRoot` and keeps the Android SplashScreen API visible until startup resolution finishes. `StartupViewModel` resolves the current UUID/profile through `UserRepository`. A found profile goes to Chat; a successful empty lookup goes to Profile Setup; a thrown lookup failure shows a generic retry screen. While resolving after the system splash (including Retry), a splash-colored screen with a small progress indicator is shown instead of the branded Compose splash. Successful Profile Setup navigates to Chat.
+- `MainActivity` hosts `ChatAppRoot` and keeps the Android SplashScreen API visible until startup resolution finishes. `StartupViewModel` resolves the current UUID/profile through `UserRepository`. A found profile goes to Chat; a successful empty lookup goes to Profile Setup; a thrown lookup failure shows a generic retry screen. While resolving after the system splash (including Retry), a splash-colored screen with a small progress indicator is shown instead of the branded Compose splash. Successful Profile Setup navigates to Chat. `MainActivity` is `singleTop` and consumes incoming-chat notification intents (`ACTION_OPEN_CHAT` + `message_id`) in `onCreate`/`onNewIntent` without bypassing startup/profile resolution or forcing a second Chat destination.
+- Incoming FCM (Bonus #2 Android): `ChatApp` creates channel `chat_messages` (`IMPORTANCE_DEFAULT`) beside existing `message_send_work`. `ChatFirebaseMessagingService.onMessageReceived` parses data-only `chat_message` / `schema_version=1` payloads, suppresses self-sender via `:data:chat` `CurrentPushUserMatcher` (backed by `UserIdentityStore`, not exposed to `:app`) and resumed-Chat cases (`ChatScreenVisibility`), checks existing `POST_NOTIFICATIONS` permission without blocking registration, and posts via `ChatIncomingNotifications` (deterministic ID `incoming-chat-message:<message_id>`, group `chat_messages`, PRIVATE + public lockscreen copy). FCM never writes Room, fetches messages, or downloads media; Realtime remains authoritative for sync.
 
 ## Not Implemented (non-mandatory / bonus or future)
 
 - Full-screen media viewer, video playback, download/save, per-attachment retry UI, and upload byte-progress UI. Photo Picker + composer preview + send handoff + Storage upload + `create_media_message` + Room `SENT` reconciliation + chat bubble rendering are implemented.
-- Bonus #1 visual polish is complete. Bonus #2 Stage 1B–2 Firebase foundation + FID registration plumbing are implemented, including local FID cache and startup reconciliation after an existing/created profile. Not yet: Edge Function / `push_registrations` backend, Database Webhook → FCM HTTP v1 send, incoming-chat notification channel/display, notification navigation. Other bonuses (voice notes, instrumentation/UI tests) are not started.
+- Bonus #1 visual polish is complete. Bonus #2 Android FID registration + incoming notification display/navigation are implemented. Backend Database Webhook → Edge Function → FCM HTTP v1 send (and any remaining Edge Function deploy notes) may still be pending outside Android. Other bonuses (voice notes, instrumentation/UI tests) are not started.
 - Out of scope unless explicitly required later: Supabase Auth, presence, typing indicators, and read receipts.
 
 ## Working Conventions

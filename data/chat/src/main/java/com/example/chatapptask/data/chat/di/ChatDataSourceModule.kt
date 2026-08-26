@@ -6,8 +6,10 @@ import com.example.chatapptask.data.chat.local.ChatLocalDataSource
 import com.example.chatapptask.data.chat.local.FileOutgoingMediaStore
 import com.example.chatapptask.data.chat.local.OutgoingMediaStore
 import com.example.chatapptask.data.chat.local.RoomChatLocalDataSource
+import com.example.chatapptask.data.chat.push.CurrentPushUserMatcher
 import com.example.chatapptask.data.chat.push.PushInstallationIdStore
 import com.example.chatapptask.data.chat.push.SharedPreferencesPushInstallationIdStore
+import com.example.chatapptask.data.chat.push.UserIdentityCurrentPushUserMatcher
 import com.example.chatapptask.data.chat.remote.ChatRemoteDataSource
 import com.example.chatapptask.data.chat.remote.PushRegistrationRemoteDataSource
 import com.example.chatapptask.data.chat.remote.SupabaseChatMediaPublicUrlFactory
@@ -64,6 +66,11 @@ abstract class ChatDataSourceModule {
     abstract fun bindPushInstallationIdStore(
         implementation: SharedPreferencesPushInstallationIdStore,
     ): PushInstallationIdStore
+
+    @Binds
+    abstract fun bindCurrentPushUserMatcher(
+        implementation: UserIdentityCurrentPushUserMatcher,
+    ): CurrentPushUserMatcher
 
     @Binds
     abstract fun bindChatMediaPublicUrlFactory(
