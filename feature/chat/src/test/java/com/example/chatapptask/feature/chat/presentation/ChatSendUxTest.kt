@@ -120,6 +120,93 @@ class ChatSendUxTest {
         )
     }
 
+    @Test
+    fun incomingWhileNearNewest_scrollsToNewest() {
+        assertTrue(
+            shouldScrollToIncomingLiveMessage(
+                previousNewestMessageId = UUID.fromString("00000000-0000-0000-0000-000000000001"),
+                newestMessage = message(
+                    id = "00000000-0000-0000-0000-000000000003",
+                    senderId = otherUserId,
+                    status = MessageSendStatus.SENT,
+                ),
+                isNearNewest = true,
+            ),
+        )
+    }
+
+    @Test
+    fun incomingWhileReadingOlderMessages_doesNotScroll() {
+        assertFalse(
+            shouldScrollToIncomingLiveMessage(
+                previousNewestMessageId = UUID.fromString("00000000-0000-0000-0000-000000000001"),
+                newestMessage = message(
+                    id = "00000000-0000-0000-0000-000000000003",
+                    senderId = otherUserId,
+                    status = MessageSendStatus.SENT,
+                ),
+                isNearNewest = false,
+            ),
+        )
+    }
+
+    @Test
+    fun outgoingOptimisticSend_stillScrollsIndependentlyOfIncomingRule() {
+        assertTrue(
+            shouldScrollToOutgoingOptimisticMessage(
+                previousNewestMessageId = UUID.fromString("00000000-0000-0000-0000-000000000001"),
+                newestMessage = message(
+                    id = "00000000-0000-0000-0000-000000000002",
+                    senderId = currentUserId,
+                    status = MessageSendStatus.SENDING,
+                ),
+                currentUserId = currentUserId,
+            ),
+        )
+        assertFalse(
+            shouldScrollToIncomingLiveMessage(
+                previousNewestMessageId = UUID.fromString("00000000-0000-0000-0000-000000000001"),
+                newestMessage = message(
+                    id = "00000000-0000-0000-0000-000000000002",
+                    senderId = currentUserId,
+                    status = MessageSendStatus.SENDING,
+                ),
+                isNearNewest = false,
+            ),
+        )
+    }
+
+    @Test
+    fun pagination_doesNotTriggerIncomingNewestScroll() {
+        val newestId = UUID.fromString("00000000-0000-0000-0000-000000000005")
+        assertFalse(
+            shouldScrollToIncomingLiveMessage(
+                previousNewestMessageId = newestId,
+                newestMessage = message(
+                    id = newestId.toString(),
+                    senderId = otherUserId,
+                    status = MessageSendStatus.SENT,
+                ),
+                isNearNewest = true,
+            ),
+        )
+    }
+
+    @Test
+    fun initialLoad_doesNotTriggerIncomingNewestScroll() {
+        assertFalse(
+            shouldScrollToIncomingLiveMessage(
+                previousNewestMessageId = null,
+                newestMessage = message(
+                    id = "00000000-0000-0000-0000-000000000004",
+                    senderId = otherUserId,
+                    status = MessageSendStatus.SENT,
+                ),
+                isNearNewest = true,
+            ),
+        )
+    }
+
     private fun message(
         id: String,
         senderId: UUID,

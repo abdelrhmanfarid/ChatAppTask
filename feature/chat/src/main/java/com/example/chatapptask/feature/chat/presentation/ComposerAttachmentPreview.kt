@@ -132,7 +132,6 @@ private fun ComposerAttachmentThumbnail(
             enabled = enabled,
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .size(28.dp)
                 .semantics { contentDescription = removeDescription },
         ) {
             Box(

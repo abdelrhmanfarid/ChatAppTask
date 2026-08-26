@@ -22,6 +22,8 @@ interface OutgoingMediaStore {
 
     fun hasReadableCopy(localUri: String): Boolean
 
+    fun copySizeBytes(localUri: String): Long
+
     fun readCopyBytes(localUri: String): ByteArray
 }
 
@@ -61,6 +63,12 @@ class FileOutgoingMediaStore @Inject constructor(
         val path = Uri.parse(localUri).path ?: return false
         val file = File(path)
         return file.isFile && file.canRead() && file.length() > 0L
+    }
+
+    override fun copySizeBytes(localUri: String): Long {
+        val path = Uri.parse(localUri).path ?: return 0L
+        val file = File(path)
+        return if (file.isFile && file.canRead()) file.length() else 0L
     }
 
     override fun readCopyBytes(localUri: String): ByteArray {

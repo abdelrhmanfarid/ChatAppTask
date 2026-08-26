@@ -1,6 +1,7 @@
 package com.example.chatapptask.data.chat.worker
 
 import androidx.work.ListenableWorker
+import com.example.chatapptask.data.chat.repository.PermanentMediaUploadException
 import com.example.chatapptask.data.chat.repository.PersistedMediaLocalFileMissingException
 import com.example.chatapptask.data.chat.repository.PersistedMediaMessageNotFoundException
 import com.example.chatapptask.data.chat.repository.PersistedMessageIsNotMediaException
@@ -35,6 +36,12 @@ class SendMediaMessageWorkerTest {
         assertEquals(
             ListenableWorker.Result.failure(),
             sendMediaMessageWorkerResult(PersistedMediaLocalFileMissingException(messageId, mediaId)),
+        )
+        assertEquals(
+            ListenableWorker.Result.failure(),
+            sendMediaMessageWorkerResult(
+                PermanentMediaUploadException("Each photo or video must be 50 MB or smaller."),
+            ),
         )
     }
 

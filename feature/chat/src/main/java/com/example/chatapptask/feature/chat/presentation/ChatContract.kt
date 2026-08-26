@@ -15,13 +15,14 @@ data class ComposerAttachment(
     val uri: String,
     val mediaType: MediaType,
     val mimeType: String,
+    val sizeBytes: Long? = null,
 ) {
     fun toPendingMedia(): PendingMedia =
         PendingMedia(
             localUri = uri,
             mediaType = mediaType,
             mimeType = mimeType,
-            sizeBytes = null,
+            sizeBytes = sizeBytes,
             width = null,
             height = null,
         )

@@ -1,8 +1,11 @@
 package com.example.chatapptask.feature.chat.presentation
 
+import com.example.chatapptask.core.domain.model.MAX_MEDIA_ITEM_BYTES
 import com.example.chatapptask.core.domain.model.MediaType
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ComposerMediaResolverTest {
@@ -23,11 +26,12 @@ class ComposerMediaResolverTest {
     }
 
     @Test
-    fun composerAttachment_mapsToPendingMediaWithoutDimensions() {
+    fun composerAttachment_mapsToPendingMediaWithResolvedSize() {
         val attachment = ComposerAttachment(
             uri = "content://picker/1",
             mediaType = MediaType.VIDEO,
             mimeType = "video/mp4",
+            sizeBytes = 12L,
         )
 
         val pending = attachment.toPendingMedia()
@@ -35,8 +39,27 @@ class ComposerMediaResolverTest {
         assertEquals("content://picker/1", pending.localUri)
         assertEquals(MediaType.VIDEO, pending.mediaType)
         assertEquals("video/mp4", pending.mimeType)
-        assertNull(pending.sizeBytes)
+        assertEquals(12L, pending.sizeBytes)
         assertNull(pending.width)
         assertNull(pending.height)
+    }
+
+    @Test
+    fun oversizedMedia_isRejectedAtLimitBoundary() {
+        assertFalse(isOversizedMedia(null))
+        assertFalse(isOversizedMedia(0L))
+        assertFalse(isOversizedMedia(MAX_MEDIA_ITEM_BYTES - 1))
+        assertFalse(isOversizedMedia(MAX_MEDIA_ITEM_BYTES))
+        assertTrue(isOversizedMedia(MAX_MEDIA_ITEM_BYTES + 1))
+        assertTrue(isOversizedMedia(59_155_328L))
+    }
+
+    @Test
+    fun resolvedMediaSizeBytes_prefersOpenableColumnThenAssetLength() {
+        assertEquals(12L, resolvedMediaSizeBytes(openableColumnSize = 12L, assetFileLength = 99L))
+        assertEquals(99L, resolvedMediaSizeBytes(openableColumnSize = -1L, assetFileLength = 99L))
+        assertEquals(99L, resolvedMediaSizeBytes(openableColumnSize = null, assetFileLength = 99L))
+        assertNull(resolvedMediaSizeBytes(openableColumnSize = -1L, assetFileLength = -1L))
+        assertNull(resolvedMediaSizeBytes(openableColumnSize = null, assetFileLength = null))
     }
 }

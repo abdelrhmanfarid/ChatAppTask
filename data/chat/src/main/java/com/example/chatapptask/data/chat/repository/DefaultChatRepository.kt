@@ -1,6 +1,7 @@
 package com.example.chatapptask.data.chat.repository
 
 import com.example.chatapptask.core.common.identity.UserIdentityStore
+import com.example.chatapptask.core.domain.model.MAX_MEDIA_ITEM_BYTES
 import com.example.chatapptask.core.domain.model.MediaUploadStatus
 import com.example.chatapptask.core.domain.model.Message
 import com.example.chatapptask.core.domain.model.MessageMedia
@@ -76,6 +77,13 @@ class DefaultChatRepository @Inject constructor(
     }
 
     override suspend fun retryMessage(messageId: UUID) {
+        val message = localDataSource.getMessageById(messageId)
+            ?: throw PersistedTextMessageNotFoundException(messageId)
+        if (message.media.isNotEmpty()) {
+            requirePersistedMediaMessage(messageId)
+            schedulePersistedMediaMessage(messageId, MediaMessageScheduleReason.MANUAL_RETRY)
+            return
+        }
         requirePersistedTextMessage(messageId)
         schedulePersistedTextMessage(messageId, TextMessageScheduleReason.MANUAL_RETRY)
     }
@@ -148,6 +156,12 @@ class DefaultChatRepository @Inject constructor(
     ) {
         require(media.isNotEmpty()) { MEDIA_COUNT_REQUIRED }
         require(media.size <= MAX_MEDIA_ITEMS) { MEDIA_COUNT_LIMIT }
+        media.forEach { pending ->
+            val declaredSize = pending.sizeBytes
+            if (declaredSize != null && declaredSize > MAX_MEDIA_ITEM_BYTES) {
+                throw IllegalArgumentException(MEDIA_ITEM_TOO_LARGE)
+            }
+        }
 
         val senderId = userIdentityStore.getOrCreateUserId()
         val messageId = UUID.randomUUID()
@@ -161,6 +175,10 @@ class DefaultChatRepository @Inject constructor(
                     mediaId = mediaId,
                     mimeType = pending.mimeType,
                 )
+                val copiedSize = outgoingMediaStore.copySizeBytes(durableUri)
+                if (copiedSize > MAX_MEDIA_ITEM_BYTES) {
+                    throw IllegalArgumentException(MEDIA_ITEM_TOO_LARGE)
+                }
                 MessageMedia(
                     id = mediaId,
                     messageId = messageId,
@@ -203,7 +221,17 @@ class DefaultChatRepository @Inject constructor(
         messageId: UUID,
         onAttachmentProgress: suspend (current: Int, total: Int) -> Unit = { _, _ -> },
     ) {
-        val message = requirePersistedMediaMessage(messageId)
+        val message = try {
+            requirePersistedMediaMessage(messageId)
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: PermanentMediaUploadException) {
+            localDataSource.markMessageSendFailed(
+                messageId = messageId,
+                lastError = exception.message ?: MEDIA_ITEM_TOO_LARGE,
+            )
+            throw exception
+        }
         localDataSource.beginMessageSendAttempt(messageId)
 
         try {
@@ -249,6 +277,7 @@ class DefaultChatRepository @Inject constructor(
         if (!outgoingMediaStore.hasReadableCopy(localUri)) {
             throw PersistedMediaLocalFileMissingException(media.messageId, media.id)
         }
+        requireMediaWithinUploadLimit(localUri)
 
         localDataSource.beginMediaUploadAttempt(media.id)
         try {
@@ -272,7 +301,7 @@ class DefaultChatRepository @Inject constructor(
                 mediaId = media.id,
                 error = exception.message ?: UNKNOWN_MEDIA_UPLOAD_ERROR,
             )
-            throw exception
+            throw wrapPermanentStorageRejection(exception)
         }
     }
 
@@ -322,8 +351,24 @@ class DefaultChatRepository @Inject constructor(
             if (!outgoingMediaStore.hasReadableCopy(localUri)) {
                 throw PersistedMediaLocalFileMissingException(messageId, media.id)
             }
+            requireMediaWithinUploadLimit(localUri)
         }
         return message.copy(media = ordered)
+    }
+
+    private fun requireMediaWithinUploadLimit(localUri: String) {
+        val sizeBytes = outgoingMediaStore.copySizeBytes(localUri)
+        if (sizeBytes > MAX_MEDIA_ITEM_BYTES) {
+            throw PermanentMediaUploadException(MEDIA_ITEM_TOO_LARGE)
+        }
+    }
+
+    private fun wrapPermanentStorageRejection(exception: Exception): Exception {
+        if (exception is PermanentMediaUploadException) return exception
+        if (isPermanentStorageRejection(exception)) {
+            return PermanentMediaUploadException(exception.message ?: MEDIA_ITEM_TOO_LARGE)
+        }
+        return exception
     }
 
     private suspend fun schedulePersistedMediaMessage(
@@ -395,7 +440,18 @@ class DefaultChatRepository @Inject constructor(
             createdAt = sentMessage.createdAt,
             updatedAt = sentMessage.updatedAt,
         )
+        if (hasAndroidOnlyMediaState(existing)) return
+        val localMediaIds = existing.media.map(MessageMedia::id).toSet()
+        val missingMedia = sentMessage.media.filter { media -> media.id !in localMediaIds }
+        if (missingMedia.isNotEmpty()) {
+            localDataSource.upsertMedia(missingMedia)
+        }
     }
+
+    private fun hasAndroidOnlyMediaState(message: Message): Boolean =
+        message.media.any { media ->
+            media.localUri != null || media.uploadStatus != MediaUploadStatus.UPLOADED
+        }
 
     private suspend fun persistRemoteMessagePage(messages: List<Message>) {
         if (messages.isEmpty()) return
@@ -434,6 +490,7 @@ class DefaultChatRepository @Inject constructor(
         const val CANCELLED_SEND_ERROR = "Send cancelled."
         const val MEDIA_COUNT_REQUIRED = "A media message requires at least one attachment."
         const val MEDIA_COUNT_LIMIT = "A media message can include at most 10 attachments."
+        const val MEDIA_ITEM_TOO_LARGE = "Each photo or video must be 50 MB or smaller."
         const val MAX_MEDIA_ITEMS = 10
     }
 }
@@ -463,3 +520,28 @@ internal class PersistedMediaLocalFileMissingException(
 ) : PersistedMediaMessageException(
     "Media message $messageId is missing a durable local file for $mediaId.",
 )
+
+internal class PermanentMediaUploadException(message: String) : PersistedMediaMessageException(message)
+
+internal fun isPermanentStorageRejection(error: Throwable): Boolean {
+    generateSequence(error, Throwable::cause).forEach { current ->
+        if (current is PermanentMediaUploadException) return true
+        val status = storageStatusCode(current)
+        if (status == 413) return true
+        if (status == 400 && isFileTooLargeMessage(current)) return true
+        if (isFileTooLargeMessage(current)) return true
+    }
+    return false
+}
+
+private fun storageStatusCode(error: Throwable): Int? =
+    (error as? io.github.jan.supabase.exceptions.RestException)?.statusCode
+
+private fun isFileTooLargeMessage(error: Throwable): Boolean {
+    val text = error.message.orEmpty().lowercase()
+    return "too large" in text ||
+        "payload too large" in text ||
+        "maximum allowed size" in text ||
+        "max file size" in text ||
+        "exceeded the maximum" in text
+}

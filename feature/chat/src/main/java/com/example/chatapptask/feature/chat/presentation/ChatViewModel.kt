@@ -2,6 +2,7 @@ package com.example.chatapptask.feature.chat.presentation
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.chatapptask.core.domain.ChatMediaPublicUrlFactory
 import com.example.chatapptask.core.domain.model.MessageSendStatus
 import com.example.chatapptask.core.domain.repository.ChatRepository
 import com.example.chatapptask.core.domain.repository.UserRepository
@@ -20,6 +21,8 @@ import kotlinx.coroutines.launch
 class ChatViewModel @Inject constructor(
     private val chatRepository: ChatRepository,
     private val userRepository: UserRepository,
+    private val chatMediaPublicUrlFactory: ChatMediaPublicUrlFactory =
+        ChatMediaPublicUrlFactory { null },
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
@@ -66,6 +69,9 @@ class ChatViewModel @Inject constructor(
             }
         }
     }
+
+    internal fun publicChatMediaUrl(storagePath: String): String? =
+        chatMediaPublicUrlFactory.publicUrlFor(storagePath)
 
     fun onAction(action: ChatAction) {
         when (action) {
