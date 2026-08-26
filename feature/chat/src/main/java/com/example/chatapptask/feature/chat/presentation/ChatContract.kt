@@ -1,5 +1,6 @@
 package com.example.chatapptask.feature.chat.presentation
 
+import androidx.annotation.StringRes
 import com.example.chatapptask.core.domain.model.MediaType
 import com.example.chatapptask.core.domain.model.Message
 import com.example.chatapptask.core.domain.model.PendingMedia
@@ -70,7 +71,14 @@ sealed interface ChatAction {
 }
 
 sealed interface ChatEvent {
-    data class ShowError(val message: String) : ChatEvent
+    /**
+     * User-facing snackbar. [messageRes] must already be a friendly resource — never a raw
+     * exception message. [isError] drives red Material error snackbar styling when true.
+     */
+    data class ShowError(
+        @StringRes val messageRes: Int,
+        val isError: Boolean = true,
+    ) : ChatEvent
 
     /** Launch Photo Picker at the Compose boundary; [maxItems] is remaining capacity (1..10). */
     data class OpenMediaPicker(val maxItems: Int) : ChatEvent

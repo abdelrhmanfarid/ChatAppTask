@@ -7,6 +7,7 @@ import com.example.chatapptask.core.domain.model.PendingMedia
 import com.example.chatapptask.core.domain.model.User
 import com.example.chatapptask.core.domain.repository.ChatRepository
 import com.example.chatapptask.core.domain.repository.UserRepository
+import com.example.chatapptask.feature.chat.R
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
@@ -255,7 +256,7 @@ class ChatViewModelTest {
         advanceUntilIdle()
 
         assertEquals(
-            ChatEvent.ShowError("media scheduler unavailable"),
+            ChatEvent.ShowError(R.string.chat_error_unexpected, isError = true),
             viewModel.events.first(),
         )
         assertEquals(media, viewModel.uiState.value.selectedAttachments)
@@ -291,7 +292,7 @@ class ChatViewModelTest {
         advanceUntilIdle()
 
         assertEquals(
-            ChatEvent.ShowError("You can attach up to 10 photos or videos."),
+            ChatEvent.ShowError(R.string.chat_attachment_limit, isError = true),
             viewModel.events.first(),
         )
     }
@@ -371,7 +372,7 @@ class ChatViewModelTest {
             advanceUntilIdle()
 
             assertEquals(
-                ChatEvent.ShowError("scheduler unavailable"),
+                ChatEvent.ShowError(R.string.chat_error_unexpected, isError = true),
                 viewModel.events.first(),
             )
             assertEquals("Hello", viewModel.uiState.value.composerText)
@@ -440,11 +441,59 @@ class ChatViewModelTest {
         advanceUntilIdle()
 
         assertEquals(
-            ChatEvent.ShowError("network unavailable"),
+            ChatEvent.ShowError(R.string.chat_error_sync, isError = true),
             viewModel.events.first(),
         )
         assertEquals(listOf(existing), viewModel.uiState.value.messages)
+        assertTrue(viewModel.uiState.value.hasResolvedLocalMessages)
     }
+
+    @Test
+    fun latestLoadOfflineFailure_emitsFriendlyOfflineErrorAndKeepsCachedMessages() =
+        runTest(dispatcher) {
+            val existing = message("00000000-0000-0000-0000-000000000001")
+            val raw =
+                "HTTP request to https://xyz.supabase.co/rest/v1/messages failed with message: " +
+                    "Unable to resolve host xyz.supabase.co"
+            val repository = FakeChatRepository().apply {
+                messages.value = listOf(existing)
+                loadLatestFailure = java.net.UnknownHostException(raw)
+            }
+            val viewModel = ChatViewModel(repository, FakeUserRepository())
+
+            advanceUntilIdle()
+
+            val event = viewModel.events.first()
+            assertEquals(
+                ChatEvent.ShowError(R.string.chat_error_offline, isError = true),
+                event,
+            )
+            assertTrue(event is ChatEvent.ShowError && event.isError)
+            assertEquals(listOf(existing), viewModel.uiState.value.messages)
+            assertTrue(viewModel.uiState.value.hasResolvedLocalMessages)
+        }
+
+    @Test
+    fun latestLoadTimeoutFailure_emitsFriendlyTimeoutErrorAndKeepsCachedMessages() =
+        runTest(dispatcher) {
+            val existing = message("00000000-0000-0000-0000-000000000001")
+            val repository = FakeChatRepository().apply {
+                messages.value = listOf(existing)
+                loadLatestFailure = java.net.SocketTimeoutException(
+                    "HTTP request to https://xyz.supabase.co timed out",
+                )
+            }
+            val viewModel = ChatViewModel(repository, FakeUserRepository())
+
+            advanceUntilIdle()
+
+            assertEquals(
+                ChatEvent.ShowError(R.string.chat_error_timeout, isError = true),
+                viewModel.events.first(),
+            )
+            assertEquals(listOf(existing), viewModel.uiState.value.messages)
+            assertTrue(viewModel.uiState.value.hasResolvedLocalMessages)
+        }
 
     @Test
     fun start_startsRealtimeThenLoadsLatest() = runTest(dispatcher) {
@@ -469,7 +518,7 @@ class ChatViewModelTest {
         advanceUntilIdle()
 
         assertEquals(
-            ChatEvent.ShowError("realtime unavailable"),
+            ChatEvent.ShowError(R.string.chat_error_sync, isError = true),
             viewModel.events.first(),
         )
         assertEquals(1, repository.loadLatestCount)
@@ -631,7 +680,7 @@ class ChatViewModelTest {
         advanceUntilIdle()
 
         assertEquals(
-            ChatEvent.ShowError("older page unavailable"),
+            ChatEvent.ShowError(R.string.chat_error_sync, isError = true),
             viewModel.events.first(),
         )
         assertTrue(viewModel.uiState.value.hasMoreOlderMessages)

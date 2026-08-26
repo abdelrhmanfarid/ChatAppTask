@@ -35,6 +35,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -97,6 +98,7 @@ fun ChatRoute(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    var snackbarIsError by remember { mutableStateOf(false) }
     val lifecycleOwner = LocalLifecycleOwner.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -116,6 +118,7 @@ fun ChatRoute(
         }
         if (snackbarMessage != null) {
             scope.launch {
+                snackbarIsError = false
                 snackbarHostState.showSnackbar(snackbarMessage)
             }
         }
@@ -135,7 +138,10 @@ fun ChatRoute(
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             viewModel.events.collect { event ->
                 when (event) {
-                    is ChatEvent.ShowError -> snackbarHostState.showSnackbar(event.message)
+                    is ChatEvent.ShowError -> {
+                        snackbarIsError = event.isError
+                        snackbarHostState.showSnackbar(context.getString(event.messageRes))
+                    }
                     is ChatEvent.OpenMediaPicker -> {
                         val request = PickVisualMediaRequest(
                             ActivityResultContracts.PickVisualMedia.ImageAndVideo,
@@ -155,6 +161,7 @@ fun ChatRoute(
         state = state,
         onAction = viewModel::onAction,
         snackbarHostState = snackbarHostState,
+        snackbarIsError = snackbarIsError,
         chatMediaPublicUrl = viewModel::publicChatMediaUrl,
         profileImagePublicUrl = viewModel::publicProfileImageUrl,
         modifier = modifier,
@@ -168,6 +175,7 @@ fun ChatScreen(
     onAction: (ChatAction) -> Unit,
     snackbarHostState: SnackbarHostState,
     modifier: Modifier = Modifier,
+    snackbarIsError: Boolean = false,
     chatMediaPublicUrl: (String) -> String? = { null },
     profileImagePublicUrl: (String?) -> String? = { null },
 ) {
@@ -204,7 +212,20 @@ fun ChatScreen(
                 modifier = Modifier.imePadding(),
             )
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = {
+            SnackbarHost(snackbarHostState) { data ->
+                if (snackbarIsError) {
+                    Snackbar(
+                        snackbarData = data,
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError,
+                        actionContentColor = MaterialTheme.colorScheme.onError,
+                    )
+                } else {
+                    Snackbar(snackbarData = data)
+                }
+            }
+        },
     ) { contentPadding ->
         val listState = rememberLazyListState()
         val newestMessage = state.messages.firstOrNull()
