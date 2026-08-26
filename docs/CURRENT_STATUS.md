@@ -1,18 +1,18 @@
 # Current Status
 
-Branch: `feature/visual-polish`. Repository code is authoritative; check `git status` before work.
+Branch: `feature/fcm-notifications`. Repository code is authoritative; check `git status` before work.
 
-Required Android implementation and manual runtime verification for the assignment are complete. Bonus #1 phase 1 (visual foundation, Profile Setup, Chat shell, message bubbles/states) is committed. Bonus #1 phase 2 (media/composer polish, attachment previews, restrained micro-interactions) is implemented on this branch and awaiting manual verification.
+Required Android implementation and Bonus #1 are complete. Bonus #2 Stage 1B–2 (Firebase foundation + FID registration) and Android incoming-chat FCM notification display/navigation are on this branch. Backend Database Webhook → FCM HTTP v1 send remains separate.
 
 ## Modules
 
-- `:app`: application entry point, Material 3 theme, Android/Compose splash, Hilt/WorkManager setup.
+- `:app`: application entry point, Material 3 theme, Android/Compose splash, Hilt/WorkManager setup, Firebase Messaging (`ChatFirebaseMessagingService` → FID registration + data-only incoming chat notifications via `ChatIncomingNotifications`).
 - `:core:common`: `UserIdentityStore`; `AndroidIdUserIdentityStore` derives a stable UUID from `Settings.Secure.ANDROID_ID` (no identity DataStore).
 - `:core:ui`: shared Compose UI utilities (`clearFocusOnTap()`, `ChatUiTokens`, optional `rememberHapticAction()`).
 - `:core:domain`: pure Kotlin models and `ChatRepository`/`UserRepository` contracts; `ChatMediaPublicUrlFactory` and `ProfileImagePublicUrlFactory`.
 - `:core:database`: Room database, entities, DAOs, converters, and mappings.
-- `:core:network`: Supabase client, DTOs, mappings, and debug-only Ktor logging.
-- `:data:chat`: Room/Supabase data sources, repositories, DI, and text-send WorkManager flow.
+- `:core:network`: Supabase client (PostgREST, Realtime, Storage, Functions), DTOs (including `RegisterPushRequestDto`), mappings, and debug-only Ktor logging.
+- `:data:chat`: Room/Supabase data sources, repositories, DI, text/media WorkManager send, and FCM FID registration (`PushInstallationRegistrar` / `SupabasePushRegistrationRemoteDataSource`).
 - `:feature:profile`: Profile Setup contract, ViewModel, and Compose UI.
 - `:feature:chat`: Chat contract, ViewModel, and text-chat Compose UI.
 
@@ -67,12 +67,13 @@ Required Android implementation and manual runtime verification for the assignme
 - Selected attachments are temporary composer state only (not Room-persisted). Durable copies remain repository-owned after Send.
 - Messages remain newest-to-oldest in state; `LazyColumn(reverseLayout = true)` puts the newest item at the visual bottom with UUID keys.
 - Outgoing bubbles show `SENDING`, `SENT`, or `FAILED`; failed messages retry through `ChatAction.RetryMessage`. `ChatRepository.retryMessage` routes by persisted type: text-only rows reuse unique work `send-text-message:<UUID>` (`REPLACE`); media rows (including media + optional text) reuse unique work `send-media-message:<UUID>` (`REPLACE`) without creating a new Room message. Already `UPLOADED` attachments and their storage paths are left unchanged until the existing media worker runs.
-- `MainActivity` hosts `ChatAppRoot` and keeps the Android SplashScreen API visible until startup resolution finishes. `StartupViewModel` resolves the current UUID/profile through `UserRepository`. A found profile goes to Chat; a successful empty lookup goes to Profile Setup; a thrown lookup failure shows a generic retry screen. While resolving after the system splash (including Retry), a splash-colored screen with a small progress indicator is shown instead of the branded Compose splash. Successful Profile Setup navigates to Chat.
+- `MainActivity` hosts `ChatAppRoot` and keeps the Android SplashScreen API visible until startup resolution finishes. `StartupViewModel` resolves the current UUID/profile through `UserRepository`. A found profile goes to Chat; a successful empty lookup goes to Profile Setup; a thrown lookup failure shows a generic retry screen. While resolving after the system splash (including Retry), a splash-colored screen with a small progress indicator is shown instead of the branded Compose splash. Successful Profile Setup navigates to Chat. `MainActivity` is `singleTop` and consumes incoming-chat notification intents (`ACTION_OPEN_CHAT` + `message_id`) in `onCreate`/`onNewIntent` without bypassing startup/profile resolution or forcing a second Chat destination.
+- Incoming FCM (Bonus #2 Android): `ChatApp` creates channel `chat_messages` (`IMPORTANCE_DEFAULT`) beside existing `message_send_work`. `ChatFirebaseMessagingService.onMessageReceived` parses data-only `chat_message` / `schema_version=1` payloads, suppresses self-sender via `:data:chat` `CurrentPushUserMatcher` (backed by `UserIdentityStore`, not exposed to `:app`) and resumed-Chat cases (`ChatScreenVisibility`), checks existing `POST_NOTIFICATIONS` permission without blocking registration, and posts via `ChatIncomingNotifications` (deterministic child ID `incoming-chat-message:<message_id>`, shared group `chat_messages`, fixed group-summary ID `incoming-chat-group-summary` with “N new message(s)” from active child count, PRIVATE + public lockscreen copy). Child and summary taps open Chat via existing `ACTION_OPEN_CHAT`. FCM never writes Room, fetches messages, or downloads media; Realtime remains authoritative for sync.
 
 ## Not Implemented (non-mandatory / bonus or future)
 
 - Full-screen media viewer, video playback, download/save, per-attachment retry UI, and upload byte-progress UI. Photo Picker + composer preview + send handoff + Storage upload + `create_media_message` + Room `SENT` reconciliation + chat bubble rendering are implemented.
-- Bonus #1 phase 1 (static visual polish for foundation / Profile Setup / Chat shell / bubbles) is committed; phase 2 (media/composer/preview polish + restrained micro-interactions) is implemented pending manual verify. Later optional polish (entry animations beyond preview strip, haptics expansion) and other bonuses (FCM, voice notes, instrumentation/UI tests) are not started.
+- Bonus #1 visual polish is complete. Bonus #2 Android FID registration + incoming notification display/navigation are implemented. Backend Database Webhook → Edge Function → FCM HTTP v1 send (and any remaining Edge Function deploy notes) may still be pending outside Android. Other bonuses (voice notes, instrumentation/UI tests) are not started.
 - Out of scope unless explicitly required later: Supabase Auth, presence, typing indicators, and read receipts.
 
 ## Working Conventions

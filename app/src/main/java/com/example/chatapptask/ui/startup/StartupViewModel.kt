@@ -3,6 +3,7 @@ package com.example.chatapptask.ui.startup
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.chatapptask.core.domain.repository.UserRepository
+import com.example.chatapptask.data.chat.push.PushInstallationRegistrar
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlin.coroutines.cancellation.CancellationException
@@ -24,6 +25,7 @@ sealed interface StartupDestination {
 @HiltViewModel
 class StartupViewModel @Inject constructor(
     private val userRepository: UserRepository,
+    private val pushInstallationRegistrar: PushInstallationRegistrar,
 ) : ViewModel() {
     private val _destination = MutableStateFlow<StartupDestination>(StartupDestination.Resolving)
     val destination: StateFlow<StartupDestination> = _destination.asStateFlow()
@@ -38,6 +40,8 @@ class StartupViewModel @Inject constructor(
 
     fun onProfileSaved() {
         _destination.value = StartupDestination.Chat
+        // Profile Setup has just upserted the users row; reconcile any cached FID.
+        pushInstallationRegistrar.reconcileAsync()
     }
 
     private fun resolve() {
@@ -46,10 +50,12 @@ class StartupViewModel @Inject constructor(
             try {
                 val userId = userRepository.getCurrentUserId()
                 val profile = userRepository.getUser(userId)
-                _destination.value = if (profile == null) {
-                    StartupDestination.ProfileSetup
+                if (profile == null) {
+                    _destination.value = StartupDestination.ProfileSetup
                 } else {
-                    StartupDestination.Chat
+                    _destination.value = StartupDestination.Chat
+                    // Existing profile confirmed; reconcile any FID cached before users row existed.
+                    pushInstallationRegistrar.reconcileAsync()
                 }
             } catch (cancellation: CancellationException) {
                 throw cancellation
