@@ -19,7 +19,7 @@ The goal is a professional, practical coding-task-quality application rather tha
 - Supabase Realtime planned/used for live updates as appropriate
 - Supabase Storage for media
 - No Supabase Auth
-- Firebase only if needed later for FCM push notifications
+- Firebase Cloud Messaging for incoming chat push notifications
 
 ## Identity model
 
