@@ -5,6 +5,9 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,6 +16,8 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -29,11 +34,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
@@ -56,6 +64,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -82,7 +92,9 @@ import com.example.chatapptask.core.domain.model.Message
 import com.example.chatapptask.core.domain.model.MessageMedia
 import com.example.chatapptask.core.domain.model.MessageSendStatus
 import com.example.chatapptask.core.domain.model.User
+import com.example.chatapptask.core.ui.ChatUiTokens
 import com.example.chatapptask.core.ui.clearFocusOnTap
+import com.example.chatapptask.core.ui.rememberHapticAction
 import com.example.chatapptask.feature.chat.R
 import java.time.Instant
 import java.time.ZoneId
@@ -181,17 +193,21 @@ fun ChatScreen(
 ) {
     Scaffold(
         modifier = modifier.fillMaxSize(),
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
         contentWindowInsets = WindowInsets.safeDrawing,
         topBar = {
             TopAppBar(
                 title = {
                     Text(
                         text = stringResource(R.string.chat_title),
+                        style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.SemiBold,
                     )
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface,
+                    scrolledContainerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface,
                 ),
             )
         },
@@ -286,8 +302,9 @@ fun ChatScreen(
                         contentAlignment = Alignment.Center,
                     ) {
                         CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
+                            modifier = Modifier.size(24.dp),
                             strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary,
                         )
                     }
                 }
@@ -299,8 +316,11 @@ fun ChatScreen(
                         modifier = Modifier.fillMaxSize(),
                         state = listState,
                         reverseLayout = true,
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(
+                            horizontal = ChatUiTokens.MessageListHorizontalPadding,
+                            vertical = ChatUiTokens.MessageListVerticalPadding,
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(ChatUiTokens.MessageRowSpacing),
                     ) {
                         items(
                             items = state.messages,
@@ -343,17 +363,22 @@ fun MessageBubble(
     val bubbleColor = if (isOutgoing) {
         MaterialTheme.colorScheme.primaryContainer
     } else {
-        MaterialTheme.colorScheme.surfaceVariant
+        MaterialTheme.colorScheme.surfaceContainerHigh
     }
     val contentColor = if (isOutgoing) {
         MaterialTheme.colorScheme.onPrimaryContainer
     } else {
+        MaterialTheme.colorScheme.onSurface
+    }
+    val metaColor = if (isOutgoing) {
+        MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.72f)
+    } else {
         MaterialTheme.colorScheme.onSurfaceVariant
     }
     val bubbleShape = if (isOutgoing) {
-        RoundedCornerShape(20.dp, 20.dp, 4.dp, 20.dp)
+        ChatUiTokens.OutgoingBubbleShape
     } else {
-        RoundedCornerShape(20.dp, 20.dp, 20.dp, 4.dp)
+        ChatUiTokens.IncomingBubbleShape
     }
     val mediaItems = remember(message.id, message.media, message.sendStatus, chatMediaPublicUrl) {
         messageMediaItemsForDisplay(message, chatMediaPublicUrl)
@@ -370,60 +395,80 @@ fun MessageBubble(
         if (!isOutgoing) {
             MessageSenderAvatar(
                 avatarUrl = senderAvatarUrl,
-                modifier = Modifier.padding(end = 8.dp),
+                modifier = Modifier.padding(end = ChatUiTokens.MessageAvatarGap),
             )
         }
         Column(
             horizontalAlignment = if (isOutgoing) Alignment.End else Alignment.Start,
-            modifier = Modifier.widthIn(max = 320.dp),
+            modifier = Modifier.widthIn(max = ChatUiTokens.MessageBubbleMaxWidth),
         ) {
-            Text(
-                text = displayName,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(bottom = 4.dp, start = 4.dp, end = 4.dp),
-            )
+            if (!isOutgoing) {
+                Text(
+                    text = displayName,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(
+                        bottom = ChatUiTokens.SpaceXs,
+                        start = ChatUiTokens.SpaceXs,
+                        end = ChatUiTokens.SpaceXs,
+                    ),
+                )
+            }
             Surface(
                 shape = bubbleShape,
                 color = bubbleColor,
                 contentColor = contentColor,
-                tonalElevation = if (isOutgoing) 0.dp else 1.dp,
+                tonalElevation = 0.dp,
             ) {
                 Column(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    modifier = Modifier.padding(
+                        vertical = ChatUiTokens.MessageBubblePaddingVertical,
+                    ),
                 ) {
                     if (mediaItems.isNotEmpty()) {
-                        MessageMediaContent(items = mediaItems)
-                    }
-                    if (text != null) {
-                        Text(
-                            text = text,
-                            style = MaterialTheme.typography.bodyLarge,
-                            modifier = if (mediaItems.isNotEmpty()) {
-                                Modifier.padding(top = 8.dp)
-                            } else {
-                                Modifier
-                            },
+                        MessageMediaContent(
+                            items = mediaItems,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = ChatUiTokens.SpaceXs),
                         )
                     }
-                    Row(
+                    Column(
                         modifier = Modifier
-                            .align(Alignment.End)
-                            .padding(top = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            .padding(horizontal = ChatUiTokens.MessageBubblePaddingHorizontal)
+                            .padding(
+                                top = when {
+                                    mediaItems.isNotEmpty() && text != null -> ChatUiTokens.SpaceSm
+                                    else -> 0.dp
+                                },
+                            ),
                     ) {
-                        Text(
-                            text = message.createdAt.toDisplayTime(),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = contentColor.copy(alpha = 0.72f),
-                        )
-                        if (isOutgoing) {
-                            MessageSendState(
-                                status = message.sendStatus,
-                                onRetry = onRetry,
+                        if (text != null) {
+                            Text(
+                                text = text,
+                                style = MaterialTheme.typography.bodyLarge,
                             )
+                        }
+                        Row(
+                            modifier = Modifier
+                                .align(Alignment.End)
+                                .padding(top = ChatUiTokens.SpaceXs),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(ChatUiTokens.SpaceXs + 2.dp),
+                        ) {
+                            Text(
+                                text = message.createdAt.toDisplayTime(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = metaColor,
+                            )
+                            if (isOutgoing) {
+                                MessageSendState(
+                                    status = message.sendStatus,
+                                    metaColor = metaColor,
+                                    onRetry = onRetry,
+                                )
+                            }
                         }
                     }
                 }
@@ -432,7 +477,7 @@ fun MessageBubble(
         if (isOutgoing) {
             MessageSenderAvatar(
                 avatarUrl = senderAvatarUrl,
-                modifier = Modifier.padding(start = 8.dp),
+                modifier = Modifier.padding(start = ChatUiTokens.MessageAvatarGap),
             )
         }
     }
@@ -450,7 +495,7 @@ private fun MessageSenderAvatar(
     if (avatarUrl.isNullOrBlank()) {
         Box(
             modifier = modifier
-                .size(SenderAvatarSize)
+                .size(ChatUiTokens.MessageAvatarSize)
                 .clip(CircleShape)
                 .background(placeholderColor)
                 .semantics { contentDescription = avatarDescription },
@@ -474,7 +519,7 @@ private fun MessageSenderAvatar(
             .build(),
         contentDescription = avatarDescription,
         modifier = modifier
-            .size(SenderAvatarSize)
+            .size(ChatUiTokens.MessageAvatarSize)
             .clip(CircleShape),
         contentScale = ContentScale.Crop,
         loading = {
@@ -511,6 +556,7 @@ private fun MessageSenderAvatar(
 @Composable
 private fun MessageSendState(
     status: MessageSendStatus,
+    metaColor: Color,
     onRetry: () -> Unit,
 ) {
     when (status) {
@@ -518,32 +564,40 @@ private fun MessageSendState(
             CircularProgressIndicator(
                 modifier = Modifier.size(12.dp),
                 strokeWidth = 1.5.dp,
+                color = metaColor,
             )
             Text(
                 text = stringResource(R.string.chat_sending),
                 style = MaterialTheme.typography.labelSmall,
+                color = metaColor,
             )
         }
 
         MessageSendStatus.SENT -> Text(
             text = stringResource(R.string.chat_sent),
             style = MaterialTheme.typography.labelSmall,
+            color = metaColor,
         )
 
         MessageSendStatus.FAILED -> {
+            val hapticRetry = rememberHapticAction(onRetry)
             Text(
                 text = stringResource(R.string.chat_failed),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.error,
             )
             TextButton(
-                onClick = onRetry,
-                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                onClick = hapticRetry,
+                contentPadding = PaddingValues(
+                    horizontal = ChatUiTokens.SpaceSm,
+                    vertical = ChatUiTokens.SpaceXs,
+                ),
             ) {
                 Text(
                     text = stringResource(R.string.chat_retry),
                     color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.labelSmall,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
                 )
             }
         }
@@ -563,11 +617,41 @@ fun ChatComposer(
     modifier: Modifier = Modifier,
 ) {
     val attachmentDescription = stringResource(R.string.chat_attachment)
+    val hapticSend = rememberHapticAction(onSend)
+    val composerShape = RoundedCornerShape(
+        topStart = ChatUiTokens.SpaceMd,
+        topEnd = ChatUiTokens.SpaceMd,
+    )
+    val sendContainerColor by animateColorAsState(
+        targetValue = if (canSend) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerHighest
+        },
+        animationSpec = tween(durationMillis = 160),
+        label = "sendContainerColor",
+    )
+    val sendContentColor by animateColorAsState(
+        targetValue = if (canSend) {
+            MaterialTheme.colorScheme.onPrimary
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        animationSpec = tween(durationMillis = 160),
+        label = "sendContentColor",
+    )
+    val sendScale by animateFloatAsState(
+        targetValue = if (canSend) 1f else 0.96f,
+        animationSpec = tween(durationMillis = 160),
+        label = "sendScale",
+    )
 
     Surface(
         modifier = modifier.fillMaxWidth(),
+        shape = composerShape,
         color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 3.dp,
+        tonalElevation = 2.dp,
+        shadowElevation = 6.dp,
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             ComposerAttachmentPreviewRow(
@@ -576,48 +660,86 @@ fun ChatComposer(
                 enabled = !isSending,
             )
             Row(
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                modifier = Modifier.padding(
+                    horizontal = ChatUiTokens.ComposerHorizontalPadding,
+                    vertical = ChatUiTokens.ComposerVerticalPadding,
+                ),
                 verticalAlignment = Alignment.Bottom,
             ) {
-                OutlinedIconButton(
+                FilledTonalIconButton(
                     onClick = onAttachmentClick,
                     enabled = !isSending,
-                    modifier = Modifier.semantics {
-                        contentDescription = attachmentDescription
-                    },
+                    modifier = Modifier
+                        .size(ChatUiTokens.ComposerActionSize)
+                        .semantics { contentDescription = attachmentDescription },
+                    shape = MaterialTheme.shapes.medium,
+                    colors = IconButtonDefaults.filledTonalIconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                    ),
                 ) {
                     Text(
                         text = "+",
                         style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Medium,
                     )
                 }
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(ChatUiTokens.SpaceSm))
                 OutlinedTextField(
                     value = text,
                     onValueChange = onTextChanged,
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text(stringResource(R.string.chat_composer_placeholder)) },
+                    placeholder = {
+                        Text(
+                            text = stringResource(R.string.chat_composer_placeholder),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
                     minLines = 1,
                     maxLines = 4,
+                    shape = MaterialTheme.shapes.large,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+                        disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+                    ),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                     keyboardActions = KeyboardActions(
-                        onSend = { if (canSend) onSend() },
+                        onSend = { if (canSend) hapticSend() },
                     ),
                 )
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(ChatUiTokens.SpaceSm))
                 Button(
-                    onClick = onSend,
+                    onClick = hapticSend,
                     enabled = canSend,
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+                    modifier = Modifier
+                        .defaultMinSize(minWidth = ChatUiTokens.ComposerSendMinWidth)
+                        .height(ChatUiTokens.ComposerActionSize)
+                        .graphicsLayer {
+                            scaleX = sendScale
+                            scaleY = sendScale
+                        },
+                    shape = MaterialTheme.shapes.medium,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = sendContainerColor,
+                        contentColor = sendContentColor,
+                        disabledContainerColor = sendContainerColor,
+                        disabledContentColor = sendContentColor,
+                    ),
+                    contentPadding = PaddingValues(horizontal = ChatUiTokens.SpaceMd),
                 ) {
                     if (isSending) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(18.dp),
-                            color = MaterialTheme.colorScheme.onPrimary,
+                            color = sendContentColor,
                             strokeWidth = 2.dp,
                         )
                     } else {
-                        Text(stringResource(R.string.chat_send))
+                        Text(
+                            text = stringResource(R.string.chat_send),
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                        )
                     }
                 }
             }
@@ -644,22 +766,23 @@ private fun OlderMessagesLoadingIndicator(modifier: Modifier = Modifier) {
 @Composable
 private fun EmptyChatState(modifier: Modifier = Modifier) {
     Box(
-        modifier = modifier.padding(32.dp),
+        modifier = modifier.padding(ChatUiTokens.SpaceXxl),
         contentAlignment = Alignment.Center,
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(ChatUiTokens.SpaceSm),
         ) {
             Text(
                 text = stringResource(R.string.chat_empty_title),
-                style = MaterialTheme.typography.headlineSmall,
+                style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
                 textAlign = TextAlign.Center,
             )
             Text(
                 text = stringResource(R.string.chat_empty_body),
-                style = MaterialTheme.typography.bodyLarge,
+                style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
@@ -669,7 +792,6 @@ private fun EmptyChatState(modifier: Modifier = Modifier) {
 
 private const val OLDER_LOADING_ITEM_KEY = "older-messages-loading"
 private const val NEAR_NEWEST_ITEM_INDEX = 1
-private val SenderAvatarSize = 32.dp
 private const val SenderAvatarDecodeSize = 96
 private const val SENDER_AVATAR_PLACEHOLDER_GLYPH = "?"
 
