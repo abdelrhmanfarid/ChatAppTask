@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import com.example.chatapptask.data.chat.worker.MessageSendWorkNotifications
+import com.example.chatapptask.fcm.ChatIncomingNotifications
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 
@@ -15,6 +16,7 @@ class ChatApp : Application(), Configuration.Provider {
     override fun onCreate() {
         super.onCreate()
         MessageSendWorkNotifications.ensureChannel(this)
+        ChatIncomingNotifications.ensureChannel(this)
     }
 
     override val workManagerConfiguration: Configuration

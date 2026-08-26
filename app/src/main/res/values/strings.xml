@@ -3,4 +3,18 @@
     <string name="startup_error_title">Couldn\'t load your profile</string>
     <string name="startup_error_message">Check your connection and try again.</string>
     <string name="startup_error_retry">Retry</string>
+    <string name="notification_channel_chat_messages_name">Chat messages</string>
+    <string name="notification_channel_chat_messages_description">Incoming messages from other people</string>
+    <string name="notification_chat_fallback_title">Chat</string>
+    <string name="notification_chat_body_new_message">New message</string>
+    <string name="notification_chat_body_photo">Sent a photo</string>
+    <string name="notification_chat_body_video">Sent a video</string>
+    <string name="notification_chat_body_attachments">Sent attachments</string>
+    <string name="notification_chat_public_title">Chat App</string>
+    <string name="notification_chat_public_text">New message</string>
+    <string name="notification_chat_group_summary_title">Chat App</string>
+    <plurals name="notification_chat_group_summary_text">
+        <item quantity="one">%d new message</item>
+        <item quantity="other">%d new messages</item>
+    </plurals>
 </resources>

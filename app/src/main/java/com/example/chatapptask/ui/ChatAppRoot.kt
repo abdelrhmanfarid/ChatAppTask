@@ -24,6 +24,7 @@ fun ChatAppRoot(
             modifier = modifier,
         )
         StartupDestination.Chat -> {
+            ChatScreenVisibilityEffect()
             MessageSendNotificationPermissionEffect()
             ChatRoute(modifier = modifier)
         }
