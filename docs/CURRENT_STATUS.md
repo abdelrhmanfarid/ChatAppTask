@@ -1,12 +1,12 @@
 # Current Status
 
-Branch: `feature/visual-polish`. Repository code is authoritative; check `git status` before work.
+Branch: `feature/fcm-notifications`. Repository code is authoritative; check `git status` before work.
 
-Required Android implementation and manual runtime verification for the assignment are complete. Bonus #1 phase 1 (visual foundation, Profile Setup, Chat shell, message bubbles/states) is committed. Bonus #1 phase 2 (media/composer polish, attachment previews, restrained micro-interactions) is implemented on this branch and awaiting manual verification.
+Required Android implementation and Bonus #1 are complete. Bonus #2 Stage 1B (Firebase Android foundation) is implemented on this branch: Firebase BoM + Messaging, Google Services plugin, FID registration metadata, and a no-op `ChatFirebaseMessagingService.onRegistered`. Backend registration, incoming notifications, and navigation are not started.
 
 ## Modules
 
-- `:app`: application entry point, Material 3 theme, Android/Compose splash, Hilt/WorkManager setup.
+- `:app`: application entry point, Material 3 theme, Android/Compose splash, Hilt/WorkManager setup, Firebase Messaging foundation (`ChatFirebaseMessagingService`).
 - `:core:common`: `UserIdentityStore`; `AndroidIdUserIdentityStore` derives a stable UUID from `Settings.Secure.ANDROID_ID` (no identity DataStore).
 - `:core:ui`: shared Compose UI utilities (`clearFocusOnTap()`, `ChatUiTokens`, optional `rememberHapticAction()`).
 - `:core:domain`: pure Kotlin models and `ChatRepository`/`UserRepository` contracts; `ChatMediaPublicUrlFactory` and `ProfileImagePublicUrlFactory`.
@@ -72,7 +72,7 @@ Required Android implementation and manual runtime verification for the assignme
 ## Not Implemented (non-mandatory / bonus or future)
 
 - Full-screen media viewer, video playback, download/save, per-attachment retry UI, and upload byte-progress UI. Photo Picker + composer preview + send handoff + Storage upload + `create_media_message` + Room `SENT` reconciliation + chat bubble rendering are implemented.
-- Bonus #1 phase 1 (static visual polish for foundation / Profile Setup / Chat shell / bubbles) is committed; phase 2 (media/composer/preview polish + restrained micro-interactions) is implemented pending manual verify. Later optional polish (entry animations beyond preview strip, haptics expansion) and other bonuses (FCM, voice notes, instrumentation/UI tests) are not started.
+- Bonus #1 visual polish is complete. Bonus #2 Stage 1B Firebase Android foundation is in place (BoM `34.17.0`, Messaging, FID-mode metadata, stub `onRegistered`). Not yet implemented: FID backend registration, Edge Function / webhook push send, incoming-chat notification channel/display, and notification navigation. Other bonuses (voice notes, instrumentation/UI tests) are not started.
 - Out of scope unless explicitly required later: Supabase Auth, presence, typing indicators, and read receipts.
 
 ## Working Conventions
