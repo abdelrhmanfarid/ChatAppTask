@@ -14,6 +14,7 @@ interface ChatRemoteDataSource {
 
     suspend fun getMessage(messageId: UUID): Message?
 
+    /** Emits message UUIDs from `messages` and `message_media` INSERT/UPDATE events. */
     fun observeRemoteMessageIds(): Flow<UUID>
 
     suspend fun getLatestMessages(limit: Int): List<Message>

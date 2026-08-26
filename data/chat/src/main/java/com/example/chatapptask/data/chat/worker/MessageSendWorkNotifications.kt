@@ -58,10 +58,49 @@ object MessageSendWorkNotifications {
         }
     }
 
+    internal fun mediaMessageForegroundInfo(
+        context: Context,
+        messageId: UUID,
+        current: Int? = null,
+        total: Int? = null,
+    ): ForegroundInfo {
+        ensureChannel(context)
+        val workKey = mediaMessageUniqueWorkName(messageId)
+        val determinate = current != null && total != null && total > 0
+        val notification = build(
+            context = context,
+            workKey = workKey,
+            messageId = messageId,
+            title = context.getString(R.string.notification_sending_message),
+            text = if (determinate) {
+                context.getString(R.string.notification_uploading_media, current, total)
+            } else {
+                context.getString(R.string.notification_message_being_sent)
+            },
+            progress = if (determinate) {
+                MessageSendWorkProgress.Determinate(requireNotNull(current), requireNotNull(total))
+            } else {
+                MessageSendWorkProgress.Indeterminate
+            },
+            showRetry = false,
+            showCancel = true,
+        )
+        val id = notificationId(workKey)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ForegroundInfo(
+                id,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+            )
+        } else {
+            ForegroundInfo(id, notification)
+        }
+    }
+
     /**
      * Builds an ongoing send/upload notification.
      *
-     * Pass [MessageSendWorkProgress.Determinate] later for media copy such as
+     * Pass [MessageSendWorkProgress.Determinate] for media upload copy such as
      * "Uploading 2 of 5" without changing the channel or ID scheme.
      */
     internal fun build(

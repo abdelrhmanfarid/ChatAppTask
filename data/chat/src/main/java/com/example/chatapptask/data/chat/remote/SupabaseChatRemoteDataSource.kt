@@ -6,6 +6,8 @@ import com.example.chatapptask.core.domain.model.MessageMedia
 import com.example.chatapptask.core.domain.model.User
 import com.example.chatapptask.core.network.dto.MessageDto
 import com.example.chatapptask.core.network.dto.MessageMediaDto
+import com.example.chatapptask.core.network.dto.RealtimeMessageIdDto
+import com.example.chatapptask.core.network.dto.RealtimeMessageMediaMessageIdDto
 import com.example.chatapptask.core.network.dto.UserDto
 import com.example.chatapptask.core.network.mapper.createMediaMessageParams
 import com.example.chatapptask.core.network.mapper.createTextMessageInsertDto
@@ -71,12 +73,22 @@ class SupabaseChatRemoteDataSource @Inject constructor(
 
     override fun observeRemoteMessageIds(): Flow<UUID> = channelFlow {
         val channel = supabaseClient.channel(MESSAGES_REALTIME_CHANNEL)
-        val changes = channel.postgresChangeFlow<PostgresAction>(schema = PUBLIC_SCHEMA) {
+        val messageChanges = channel.postgresChangeFlow<PostgresAction>(schema = PUBLIC_SCHEMA) {
             table = MESSAGES_TABLE
         }
+        val mediaChanges = channel.postgresChangeFlow<PostgresAction>(schema = PUBLIC_SCHEMA) {
+            table = MESSAGE_MEDIA_TABLE
+        }
         val collector = launch {
-            changes.collect { action ->
-                messageIdOf(action)?.let { send(it) }
+            launch {
+                messageChanges.collect { action ->
+                    messageIdOf(action)?.let { send(it) }
+                }
+            }
+            launch {
+                mediaChanges.collect { action ->
+                    messageIdFromMedia(action)?.let { send(it) }
+                }
             }
         }
         try {
@@ -182,10 +194,13 @@ class SupabaseChatRemoteDataSource @Inject constructor(
     ): String {
         val normalizedExtension = normalizeExtension(extension)
         val storagePath = "$messageId/$mediaId.$normalizedExtension"
+        // Deterministic `{messageId}/{mediaId}.{ext}` retry: overwrite the same object if
+        // Storage succeeded but Room never recorded UPLOADED. Same pattern as profile avatars.
         supabaseClient.storage[CHAT_MEDIA_BUCKET].upload(
             path = storagePath,
             data = bytes,
         ) {
+            upsert = true
             contentType = ContentType.parse(mimeType)
         }
         return storagePath
@@ -267,12 +282,24 @@ class SupabaseChatRemoteDataSource @Inject constructor(
 
     private fun messageIdOf(action: PostgresAction): UUID? =
         try {
-            val dto = when (action) {
-                is PostgresAction.Insert -> action.decodeRecord<MessageDto>()
-                is PostgresAction.Update -> action.decodeRecord<MessageDto>()
+            val id = when (action) {
+                is PostgresAction.Insert -> action.decodeRecord<RealtimeMessageIdDto>().id
+                is PostgresAction.Update -> action.decodeRecord<RealtimeMessageIdDto>().id
                 is PostgresAction.Delete, is PostgresAction.Select -> return null
             }
-            UUID.fromString(dto.id)
+            UUID.fromString(id)
+        } catch (_: Exception) {
+            null
+        }
+
+    private fun messageIdFromMedia(action: PostgresAction): UUID? =
+        try {
+            val messageId = when (action) {
+                is PostgresAction.Insert -> action.decodeRecord<RealtimeMessageMediaMessageIdDto>().messageId
+                is PostgresAction.Update -> action.decodeRecord<RealtimeMessageMediaMessageIdDto>().messageId
+                is PostgresAction.Delete, is PostgresAction.Select -> return null
+            }
+            UUID.fromString(messageId)
         } catch (_: Exception) {
             null
         }

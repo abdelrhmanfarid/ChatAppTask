@@ -47,6 +47,10 @@ class RoomChatLocalDataSource @Inject constructor(
         }
     }
 
+    override suspend fun deleteMessage(messageId: UUID) {
+        messageDao.deleteMessage(messageId)
+    }
+
     override suspend fun upsertMessages(messages: List<Message>) {
         messageDao.upsertMessages(messages.map { message -> message.toEntity() })
         val media = messages.flatMap(Message::media)
@@ -152,6 +156,13 @@ class RoomChatLocalDataSource @Inject constructor(
             media.map { item -> item.toDomain() }
         }
 
+    override suspend fun beginMediaUploadAttempt(mediaId: UUID) {
+        messageMediaDao.beginUploadAttempt(
+            mediaId = mediaId,
+            status = MediaUploadStatus.UPLOADING,
+        )
+    }
+
     override suspend fun updateMediaUploadProgress(
         mediaId: UUID,
         status: MediaUploadStatus,
@@ -177,13 +188,11 @@ class RoomChatLocalDataSource @Inject constructor(
 
     override suspend fun markMediaUploadFailed(
         mediaId: UUID,
-        attemptCount: Int,
         error: String?,
     ) {
         messageMediaDao.markUploadFailed(
             mediaId = mediaId,
             status = MediaUploadStatus.FAILED,
-            attemptCount = attemptCount,
             lastError = error,
         )
     }

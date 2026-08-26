@@ -26,3 +26,15 @@ data class TextMessageInsertDto(
     @SerialName("text_content")
     val textContent: String,
 )
+
+@Serializable
+data class RealtimeMessageIdDto(
+    @SerialName("id")
+    val id: String,
+)
+
+@Serializable
+data class RealtimeMessageMediaMessageIdDto(
+    @SerialName("message_id")
+    val messageId: String,
+)

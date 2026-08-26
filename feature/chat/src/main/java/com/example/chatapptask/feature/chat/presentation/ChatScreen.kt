@@ -1,6 +1,10 @@
 package com.example.chatapptask.feature.chat.presentation
 
 import android.content.res.Configuration
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -44,9 +48,11 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -60,7 +66,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
+import com.example.chatapptask.core.domain.model.MediaType
+import com.example.chatapptask.core.domain.model.MediaUploadStatus
 import com.example.chatapptask.core.domain.model.Message
+import com.example.chatapptask.core.domain.model.MessageMedia
 import com.example.chatapptask.core.domain.model.MessageSendStatus
 import com.example.chatapptask.core.ui.clearFocusOnTap
 import com.example.chatapptask.feature.chat.R
@@ -69,22 +78,64 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.util.UUID
+import kotlinx.coroutines.launch
 
 @Composable
 fun ChatRoute(
     modifier: Modifier = Modifier,
-    onAttachmentClick: (() -> Unit)? = null,
     viewModel: ChatViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val lifecycleOwner = LocalLifecycleOwner.current
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val unsupportedMediaMessage = stringResource(R.string.chat_attachment_unsupported)
+    val oversizedMediaMessage = stringResource(R.string.chat_attachment_too_large)
+
+    fun handlePickedUris(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        val resolved = resolveComposerAttachments(uris, context.contentResolver)
+        if (resolved.attachments.isNotEmpty()) {
+            viewModel.onAction(ChatAction.MediaSelected(resolved.attachments))
+        }
+        val snackbarMessage = when {
+            resolved.skippedOversizedCount > 0 -> oversizedMediaMessage
+            resolved.skippedUnsupportedCount > 0 -> unsupportedMediaMessage
+            else -> null
+        }
+        if (snackbarMessage != null) {
+            scope.launch {
+                snackbarHostState.showSnackbar(snackbarMessage)
+            }
+        }
+    }
+
+    val multiMediaPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(
+            maxItems = MAX_COMPOSER_ATTACHMENTS,
+        ),
+    ) { uris -> handlePickedUris(uris) }
+
+    val singleMediaPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+    ) { uri -> handlePickedUris(listOfNotNull(uri)) }
 
     LaunchedEffect(viewModel, lifecycleOwner) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             viewModel.events.collect { event ->
                 when (event) {
                     is ChatEvent.ShowError -> snackbarHostState.showSnackbar(event.message)
+                    is ChatEvent.OpenMediaPicker -> {
+                        val request = PickVisualMediaRequest(
+                            ActivityResultContracts.PickVisualMedia.ImageAndVideo,
+                        )
+                        if (event.maxItems <= 1) {
+                            singleMediaPicker.launch(request)
+                        } else {
+                            multiMediaPicker.launch(request)
+                        }
+                    }
                 }
             }
         }
@@ -94,8 +145,8 @@ fun ChatRoute(
         state = state,
         onAction = viewModel::onAction,
         snackbarHostState = snackbarHostState,
+        chatMediaPublicUrl = viewModel::publicChatMediaUrl,
         modifier = modifier,
-        onAttachmentClick = onAttachmentClick,
     )
 }
 
@@ -106,7 +157,7 @@ fun ChatScreen(
     onAction: (ChatAction) -> Unit,
     snackbarHostState: SnackbarHostState,
     modifier: Modifier = Modifier,
-    onAttachmentClick: (() -> Unit)? = null,
+    chatMediaPublicUrl: (String) -> String? = { null },
 ) {
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -127,12 +178,17 @@ fun ChatScreen(
         bottomBar = {
             ChatComposer(
                 text = state.composerText,
+                selectedAttachments = state.selectedAttachments,
                 isSending = state.isSendRequestInProgress,
+                canSend = state.canSend,
                 onTextChanged = { text ->
                     onAction(ChatAction.ComposerTextChanged(text))
                 },
                 onSend = { onAction(ChatAction.SendText) },
-                onAttachmentClick = onAttachmentClick,
+                onAttachmentClick = { onAction(ChatAction.AttachmentClicked) },
+                onRemoveAttachment = { uri ->
+                    onAction(ChatAction.RemoveSelectedMedia(uri))
+                },
                 modifier = Modifier.imePadding(),
             )
         },
@@ -152,10 +208,15 @@ fun ChatScreen(
         }
 
         LaunchedEffect(newestMessage?.id, newestMessage?.sendStatus, state.currentUserId) {
+            val isNearNewest = listState.firstVisibleItemIndex <= NEAR_NEWEST_ITEM_INDEX
             val shouldScroll = shouldScrollToOutgoingOptimisticMessage(
                 previousNewestMessageId = previousNewestMessageId,
                 newestMessage = newestMessage,
                 currentUserId = state.currentUserId,
+            ) || shouldScrollToIncomingLiveMessage(
+                previousNewestMessageId = previousNewestMessageId,
+                newestMessage = newestMessage,
+                isNearNewest = isNearNewest,
             )
             previousNewestMessageId = newestMessage?.id
             if (shouldScroll) {
@@ -203,6 +264,7 @@ fun ChatScreen(
                             message = message,
                             isOutgoing = state.currentUserId == message.senderId,
                             onRetry = { onAction(ChatAction.RetryMessage(message.id)) },
+                            chatMediaPublicUrl = chatMediaPublicUrl,
                         )
                     }
                     if (state.isLoadingOlder) {
@@ -224,6 +286,7 @@ fun MessageBubble(
     isOutgoing: Boolean,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
+    chatMediaPublicUrl: (String) -> String? = { null },
 ) {
     val bubbleColor = if (isOutgoing) {
         MaterialTheme.colorScheme.primaryContainer
@@ -240,6 +303,10 @@ fun MessageBubble(
     } else {
         RoundedCornerShape(20.dp, 20.dp, 20.dp, 4.dp)
     }
+    val mediaItems = remember(message.id, message.media, message.sendStatus, chatMediaPublicUrl) {
+        messageMediaItemsForDisplay(message, chatMediaPublicUrl)
+    }
+    val text = message.textContent?.takeIf(String::isNotBlank)
 
     Row(
         modifier = modifier.fillMaxWidth(),
@@ -255,10 +322,18 @@ fun MessageBubble(
             Column(
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
             ) {
-                message.textContent?.takeIf(String::isNotBlank)?.let { text ->
+                if (mediaItems.isNotEmpty()) {
+                    MessageMediaContent(items = mediaItems)
+                }
+                if (text != null) {
                     Text(
                         text = text,
                         style = MaterialTheme.typography.bodyLarge,
+                        modifier = if (mediaItems.isNotEmpty()) {
+                            Modifier.padding(top = 8.dp)
+                        } else {
+                            Modifier
+                        },
                     )
                 }
                 Row(
@@ -330,67 +405,72 @@ private fun MessageSendState(
 @Composable
 fun ChatComposer(
     text: String,
+    selectedAttachments: List<ComposerAttachment>,
     isSending: Boolean,
+    canSend: Boolean,
     onTextChanged: (String) -> Unit,
     onSend: () -> Unit,
+    onAttachmentClick: () -> Unit,
+    onRemoveAttachment: (uri: String) -> Unit,
     modifier: Modifier = Modifier,
-    onAttachmentClick: (() -> Unit)? = null,
 ) {
-    val canSend = text.isNotBlank() && !isSending
-    val attachmentDescription = if (onAttachmentClick == null) {
-        stringResource(R.string.chat_attachment_unavailable)
-    } else {
-        stringResource(R.string.chat_attachment)
-    }
+    val attachmentDescription = stringResource(R.string.chat_attachment)
 
     Surface(
         modifier = modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surface,
         tonalElevation = 3.dp,
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.Bottom,
-        ) {
-            OutlinedIconButton(
-                onClick = { onAttachmentClick?.invoke() },
-                enabled = onAttachmentClick != null && !isSending,
-                modifier = Modifier.semantics {
-                    contentDescription = attachmentDescription
-                },
-            ) {
-                Text(
-                    text = "+",
-                    style = MaterialTheme.typography.titleLarge,
-                )
-            }
-            Spacer(Modifier.width(8.dp))
-            OutlinedTextField(
-                value = text,
-                onValueChange = onTextChanged,
-                modifier = Modifier.weight(1f),
-                placeholder = { Text(stringResource(R.string.chat_composer_placeholder)) },
-                minLines = 1,
-                maxLines = 4,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(
-                    onSend = { if (canSend) onSend() },
-                ),
+        Column(modifier = Modifier.fillMaxWidth()) {
+            ComposerAttachmentPreviewRow(
+                attachments = selectedAttachments,
+                onRemove = onRemoveAttachment,
+                enabled = !isSending,
             )
-            Spacer(Modifier.width(8.dp))
-            Button(
-                onClick = onSend,
-                enabled = canSend,
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+            Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.Bottom,
             ) {
-                if (isSending) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        strokeWidth = 2.dp,
+                OutlinedIconButton(
+                    onClick = onAttachmentClick,
+                    enabled = !isSending,
+                    modifier = Modifier.semantics {
+                        contentDescription = attachmentDescription
+                    },
+                ) {
+                    Text(
+                        text = "+",
+                        style = MaterialTheme.typography.titleLarge,
                     )
-                } else {
-                    Text(stringResource(R.string.chat_send))
+                }
+                Spacer(Modifier.width(8.dp))
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = onTextChanged,
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text(stringResource(R.string.chat_composer_placeholder)) },
+                    minLines = 1,
+                    maxLines = 4,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(
+                        onSend = { if (canSend) onSend() },
+                    ),
+                )
+                Spacer(Modifier.width(8.dp))
+                Button(
+                    onClick = onSend,
+                    enabled = canSend,
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+                ) {
+                    if (isSending) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Text(stringResource(R.string.chat_send))
+                    }
                 }
             }
         }
@@ -440,6 +520,7 @@ private fun EmptyChatState(modifier: Modifier = Modifier) {
 }
 
 private const val OLDER_LOADING_ITEM_KEY = "older-messages-loading"
+private const val NEAR_NEWEST_ITEM_INDEX = 1
 
 internal fun shouldScrollToOutgoingOptimisticMessage(
     previousNewestMessageId: UUID?,
@@ -452,6 +533,16 @@ internal fun shouldScrollToOutgoingOptimisticMessage(
     return newestMessage.sendStatus == MessageSendStatus.SENDING
 }
 
+internal fun shouldScrollToIncomingLiveMessage(
+    previousNewestMessageId: UUID?,
+    newestMessage: Message?,
+    isNearNewest: Boolean,
+): Boolean {
+    if (!isNearNewest) return false
+    if (newestMessage == null || previousNewestMessageId == null) return false
+    return newestMessage.id != previousNewestMessageId
+}
+
 private fun Instant.toDisplayTime(): String =
     DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)
         .withZone(ZoneId.systemDefault())
@@ -462,7 +553,52 @@ private val previewOtherUserId = UUID.fromString("44eed91f-846c-49c8-851d-bca519
 
 private val previewState = ChatUiState(
     currentUserId = previewCurrentUserId,
+    selectedAttachments = listOf(
+        ComposerAttachment(
+            uri = "content://preview/image-1",
+            mediaType = MediaType.IMAGE,
+            mimeType = "image/jpeg",
+        ),
+        ComposerAttachment(
+            uri = "content://preview/video-1",
+            mediaType = MediaType.VIDEO,
+            mimeType = "video/mp4",
+        ),
+    ),
     messages = listOf(
+        previewMessage(
+            id = "00000000-0000-0000-0000-000000000006",
+            senderId = previewCurrentUserId,
+            text = "Photo from the walk.",
+            status = MessageSendStatus.SENT,
+            createdAt = "2026-08-24T10:06:00Z",
+            media = listOf(
+                previewMedia(
+                    id = "00000000-0000-0000-0000-000000000016",
+                    messageId = "00000000-0000-0000-0000-000000000006",
+                    storagePath = "preview/image.jpg",
+                    mediaType = MediaType.IMAGE,
+                    position = 0,
+                ),
+            ),
+        ),
+        previewMessage(
+            id = "00000000-0000-0000-0000-000000000005",
+            senderId = previewOtherUserId,
+            text = null,
+            status = MessageSendStatus.SENT,
+            createdAt = "2026-08-24T10:05:00Z",
+            media = listOf(
+                previewMedia(
+                    id = "00000000-0000-0000-0000-000000000015",
+                    messageId = "00000000-0000-0000-0000-000000000005",
+                    storagePath = "preview/video.mp4",
+                    mediaType = MediaType.VIDEO,
+                    mimeType = "video/mp4",
+                    position = 0,
+                ),
+            ),
+        ),
         previewMessage(
             id = "00000000-0000-0000-0000-000000000004",
             senderId = previewCurrentUserId,
@@ -497,17 +633,39 @@ private val previewState = ChatUiState(
 private fun previewMessage(
     id: String,
     senderId: UUID,
-    text: String,
+    text: String?,
     status: MessageSendStatus,
     createdAt: String,
+    media: List<MessageMedia> = emptyList(),
 ): Message = Message(
     id = UUID.fromString(id),
     senderId = senderId,
     textContent = text,
     createdAt = Instant.parse(createdAt),
     updatedAt = Instant.parse(createdAt),
-    media = emptyList(),
+    media = media,
     sendStatus = status,
+)
+
+private fun previewMedia(
+    id: String,
+    messageId: String,
+    storagePath: String,
+    mediaType: MediaType,
+    position: Int,
+    mimeType: String = "image/jpeg",
+): MessageMedia = MessageMedia(
+    id = UUID.fromString(id),
+    messageId = UUID.fromString(messageId),
+    storagePath = storagePath,
+    mediaType = mediaType,
+    mimeType = mimeType,
+    position = position,
+    sizeBytes = null,
+    width = null,
+    height = null,
+    localUri = null,
+    uploadStatus = MediaUploadStatus.UPLOADED,
 )
 
 @Preview(

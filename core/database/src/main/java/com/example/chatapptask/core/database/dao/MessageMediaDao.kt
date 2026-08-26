@@ -48,6 +48,21 @@ interface MessageMediaDao {
         """
         UPDATE message_media
         SET upload_status = :status,
+            upload_attempt_count = upload_attempt_count + 1,
+            last_upload_error = NULL,
+            upload_progress = 0
+        WHERE id = :mediaId
+        """,
+    )
+    suspend fun beginUploadAttempt(
+        mediaId: UUID,
+        status: MediaUploadStatus,
+    )
+
+    @Query(
+        """
+        UPDATE message_media
+        SET upload_status = :status,
             upload_progress = :progress
         WHERE id = :mediaId
         """,
@@ -78,7 +93,6 @@ interface MessageMediaDao {
         """
         UPDATE message_media
         SET upload_status = :status,
-            upload_attempt_count = :attemptCount,
             last_upload_error = :lastError
         WHERE id = :mediaId
         """,
@@ -86,7 +100,6 @@ interface MessageMediaDao {
     suspend fun markUploadFailed(
         mediaId: UUID,
         status: MediaUploadStatus,
-        attemptCount: Int,
         lastError: String?,
     )
 

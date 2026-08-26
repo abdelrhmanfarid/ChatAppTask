@@ -2,6 +2,7 @@ package com.example.chatapptask.feature.chat.presentation
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.chatapptask.core.domain.ChatMediaPublicUrlFactory
 import com.example.chatapptask.core.domain.model.MessageSendStatus
 import com.example.chatapptask.core.domain.repository.ChatRepository
 import com.example.chatapptask.core.domain.repository.UserRepository
@@ -20,6 +21,8 @@ import kotlinx.coroutines.launch
 class ChatViewModel @Inject constructor(
     private val chatRepository: ChatRepository,
     private val userRepository: UserRepository,
+    private val chatMediaPublicUrlFactory: ChatMediaPublicUrlFactory =
+        ChatMediaPublicUrlFactory { null },
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
@@ -67,15 +70,62 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    internal fun publicChatMediaUrl(storagePath: String): String? =
+        chatMediaPublicUrlFactory.publicUrlFor(storagePath)
+
     fun onAction(action: ChatAction) {
         when (action) {
             is ChatAction.ComposerTextChanged -> {
                 _uiState.update { state -> state.copy(composerText = action.text) }
             }
 
-            ChatAction.SendText -> sendText()
+            ChatAction.SendText -> sendMessage()
+            ChatAction.AttachmentClicked -> requestMediaPicker()
+            is ChatAction.MediaSelected -> appendSelectedMedia(action.attachments)
+            is ChatAction.RemoveSelectedMedia -> {
+                _uiState.update { state ->
+                    state.copy(
+                        selectedAttachments = state.selectedAttachments.filterNot { attachment ->
+                            attachment.uri == action.uri
+                        },
+                    )
+                }
+            }
+
             is ChatAction.RetryMessage -> retryMessage(action.messageId)
             ChatAction.LoadOlderMessages -> loadOlderMessages()
+        }
+    }
+
+    private fun requestMediaPicker() {
+        val remaining = uiState.value.remainingAttachmentSlots
+        if (remaining <= 0) {
+            viewModelScope.launch {
+                eventChannel.send(ChatEvent.ShowError(ATTACHMENT_LIMIT_MESSAGE))
+            }
+            return
+        }
+        viewModelScope.launch {
+            eventChannel.send(ChatEvent.OpenMediaPicker(maxItems = remaining))
+        }
+    }
+
+    private fun appendSelectedMedia(incoming: List<ComposerAttachment>) {
+        if (incoming.isEmpty()) return
+        _uiState.update { state ->
+            val existingUris = state.selectedAttachments.mapTo(HashSet()) { it.uri }
+            val remaining = MAX_COMPOSER_ATTACHMENTS - state.selectedAttachments.size
+            if (remaining <= 0) return@update state
+
+            val accepted = incoming
+                .asSequence()
+                .filter { attachment -> attachment.uri !in existingUris }
+                .distinctBy { attachment -> attachment.uri }
+                .take(remaining)
+                .toList()
+            if (accepted.isEmpty()) return@update state
+
+            state.copy(selectedAttachments = state.selectedAttachments + accepted)
         }
     }
 
@@ -110,10 +160,24 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    private fun sendText() {
-        val text = uiState.value.composerText.trim()
-        if (text.isEmpty() || uiState.value.isSendRequestInProgress) return
+    private fun sendMessage() {
+        val state = uiState.value
+        if (state.isSendRequestInProgress) return
 
+        if (state.selectedAttachments.isNotEmpty()) {
+            sendMediaMessage(
+                attachments = state.selectedAttachments,
+                text = state.composerText.trim().ifBlank { null },
+            )
+            return
+        }
+
+        val text = state.composerText.trim()
+        if (text.isEmpty()) return
+        sendTextMessage(text)
+    }
+
+    private fun sendTextMessage(text: String) {
         _uiState.update { state -> state.copy(isSendRequestInProgress = true) }
         viewModelScope.launch {
             try {
@@ -121,6 +185,33 @@ class ChatViewModel @Inject constructor(
                 _uiState.update { state ->
                     state.copy(
                         composerText = "",
+                        isSendRequestInProgress = false,
+                    )
+                }
+            } catch (exception: Exception) {
+                _uiState.update { state -> state.copy(isSendRequestInProgress = false) }
+                eventChannel.send(
+                    ChatEvent.ShowError(exception.message ?: SEND_ERROR_MESSAGE),
+                )
+            }
+        }
+    }
+
+    private fun sendMediaMessage(
+        attachments: List<ComposerAttachment>,
+        text: String?,
+    ) {
+        _uiState.update { state -> state.copy(isSendRequestInProgress = true) }
+        viewModelScope.launch {
+            try {
+                chatRepository.sendMediaMessage(
+                    media = attachments.map(ComposerAttachment::toPendingMedia),
+                    text = text,
+                )
+                _uiState.update { state ->
+                    state.copy(
+                        composerText = "",
+                        selectedAttachments = emptyList(),
                         isSendRequestInProgress = false,
                     )
                 }
@@ -152,6 +243,7 @@ class ChatViewModel @Inject constructor(
         const val LOAD_ERROR_MESSAGE = "Unable to load messages."
         const val LOAD_OLDER_ERROR_MESSAGE = "Unable to load older messages."
         const val REALTIME_ERROR_MESSAGE = "Unable to start live message updates."
+        const val ATTACHMENT_LIMIT_MESSAGE = "You can attach up to 10 photos or videos."
         const val OLDER_PAGE_SIZE = 20
     }
 }
