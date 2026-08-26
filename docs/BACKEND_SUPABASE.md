@@ -11,7 +11,7 @@ Use Supabase for:
 
 Do **not** use Supabase Auth for the current project.
 
-Firebase is not the primary backend. It may be used later only for FCM notifications if needed.
+Firebase is not the primary backend. FCM is used only for incoming chat push notifications (Bonus #2).
 
 ## Identity
 
@@ -106,6 +106,20 @@ Policies (or equivalent open-anon task configuration) must allow the anon role t
 - upload (and public-read) objects in `chat-media` and `profile-images`
 
 Do not put the service-role key in the Android app or commit it to this repository.
+
+## FCM push (Bonus #2)
+
+Incoming chat pushes use FCM HTTP v1 from Supabase, not from the Android APK:
+
+- Table `push_registrations`
+- Edge Function `register-push`
+- Edge Function `send-chat-push`
+- Database Webhook on `public.messages` INSERT → `send-chat-push`
+- Webhook header `x-chat-push-secret`
+
+Server-side secret names only (`FIREBASE_PROJECT_ID`, `FIREBASE_PRIVATE_KEY`, `FIREBASE_CLIENT_EMAIL`, `CHAT_PUSH_WEBHOOK_SECRET`). Firebase service-account credentials remain server-side and must never be committed or included in the APK.
+
+Android client setup: see the repository README.
 
 Exact SQL for tables, RPC body, and policies is maintained in the Supabase project; keep Android DTOs (`UserDto`, `MessageDto`, `MessageMediaDto`, `CreateMediaMessageParams`) aligned when changing the backend.
 

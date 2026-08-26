@@ -1,6 +1,6 @@
 # Chat App Task
 
-Android real-time chat application built with Kotlin, Jetpack Compose, Clean Architecture, MVI/UDF, Room, WorkManager, and Supabase.
+Android real-time chat application built with Kotlin, Coroutines, Flow, Jetpack Compose, Material 3, Clean Architecture, MVI/UDF, Room, WorkManager, Supabase, and FCM.
 
 ## Required Features Implemented
 
@@ -58,32 +58,59 @@ Details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/CURRENT_STATUS.m
 
 1. Clone this repository.
 2. Open the project in Android Studio.
-3. Configure Supabase values (see [Supabase Configuration](#supabase-configuration)).
-4. Let Android Studio perform Gradle Sync.
-5. Run the `:app` configuration on an Android device or emulator (`minSdk` 26).
+3. Configure `local.properties` (see [Supabase Configuration](#supabase-configuration)).
+4. Add Firebase `app/google-services.json` (see [Firebase Configuration](#firebase-configuration)).
+5. Let Android Studio perform Gradle Sync.
+6. Run the `:app` configuration on an Android device or emulator (`minSdk` 26).
 
 Use Android Studio’s configured Gradle JDK. Project sources target Java 11 compatibility (`compileSdk` / `targetSdk` 37).
 
 ## Supabase Configuration
 
-The Android client reads:
-
-- `SUPABASE_URL`
-- `SUPABASE_ANON_KEY`
-
-from the repository-root `local.properties` file (or the same names as environment variables).  
+The Android client reads these names from the repository-root `local.properties` file (or the same names as environment variables).  
 `:core:network` injects them into `BuildConfig` at build time (`core/network/build.gradle.kts`).
 
 Add to **root** `local.properties` (create the file if needed):
 
 ```properties
-SUPABASE_URL=https://YOUR_PROJECT.supabase.co
-SUPABASE_ANON_KEY=YOUR_ANON_KEY
+SUPABASE_URL=...
+SUPABASE_ANON_KEY=...
+SUPABASE_PUBLISHABLE_KEY=...
 ```
 
 - Do **not** commit `local.properties` (listed in `.gitignore`).
 - Do **not** put the service-role key in the Android app or in this repository.
 - Missing values fail at runtime with a clear configuration error.
+
+## Firebase Configuration
+
+Incoming chat push uses Firebase Cloud Messaging.
+
+1. Create or open a Firebase project and register this Android app.
+2. Download `google-services.json` from the Firebase console.
+3. Place it at **`app/google-services.json`**.
+4. `app/google-services.json` is listed in `.gitignore`. **Never commit it.**
+
+Firebase **service-account** credentials stay on the server (Supabase Edge Function secrets). They must **never** be committed to this repository or packaged into the APK.
+
+## FCM Backend Setup
+
+Push delivery is automatic: a Database Webhook on `public.messages` **INSERT** calls the `send-chat-push` Edge Function, which sends FCM HTTP v1 data-only messages. The sender does not receive their own push.
+
+Backend pieces (already used by this project):
+
+- Table **`push_registrations`**
+- Edge Function **`register-push`** (Android FID registration)
+- Edge Function **`send-chat-push`**
+- Database Webhook on **`public.messages` INSERT** → **`send-chat-push`**
+- Webhook header **`x-chat-push-secret`**
+
+Server-side secret **names** only (set in the Supabase project; never commit values):
+
+- `FIREBASE_PROJECT_ID`
+- `FIREBASE_PRIVATE_KEY`
+- `FIREBASE_CLIENT_EMAIL`
+- `CHAT_PUSH_WEBHOOK_SECRET`
 
 ## Supabase Backend Requirements
 
@@ -170,15 +197,18 @@ Development verification on this project has covered:
 - Background / offline send recovery
 - Sender identity (username, avatar, timestamp)
 - Cached Room startup without a false empty-state flash
+- Incoming FCM when the app is in background or killed
+- Foreground Chat suppresses incoming notifications
+- Sender does not receive their own push
+- Notification tap opens the existing Chat screen
+- Incoming notifications are grouped / expandable
 
 ## Bonus Features
 
-Not started / not required for mandatory completion:
-
 | Item | Status |
 | --- | --- |
-| Exceptional visual polish / delightful interactions | Planned |
-| FCM push notifications | Not implemented |
+| Exceptional visual polish / delightful interactions | Implemented |
+| FCM push notifications | Implemented |
 | Audio / voice messages | Not implemented |
 | Instrumentation / UI tests | Not implemented (template only) |
 
@@ -201,11 +231,11 @@ Details: [`docs/WORKFLOW_AND_GIT.md`](docs/WORKFLOW_AND_GIT.md).
 - [`docs/PRODUCT_REQUIREMENTS.md`](docs/PRODUCT_REQUIREMENTS.md) — product requirements
 - [`docs/WORKFLOW_AND_GIT.md`](docs/WORKFLOW_AND_GIT.md) — workflow and Git
 - [`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md) — implemented project state
-- [`docs/NEXT_STEPS.md`](docs/NEXT_STEPS.md) — next work (bonus)
+- [`docs/NEXT_STEPS.md`](docs/NEXT_STEPS.md) — remaining submission actions
 - [`docs/README.md`](docs/README.md) — docs index for deeper context
 
 ## Submission
 
-The assignment expects a **public** GitHub repository that includes complete source code, this README, and configuration/setup instructions.
+The assignment expects a **public** GitHub repository that includes complete source code, this README, architecture documentation, and API/configuration instructions.
 
-Before submission, ensure the GitHub repository visibility is set to **Public**.
+Before emailing the recruiter, ensure the GitHub repository visibility is set to **Public** and share the repository link.
